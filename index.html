@@ -814,7 +814,7 @@ $("r-save").onclick=async()=>{await _rs();if(/^✓/.test($("r-hint").textContent
 
 /* ---- diagnóstico y rescate del comprobante compartido ---- */
 (function(){
-  const vtag=document.createElement("div");vtag.textContent="versión 7";vtag.style.cssText="text-align:center;opacity:.5;font-size:11px;margin:18px 0 6px";document.body.appendChild(vtag);
+  const vtag=document.createElement("div");vtag.textContent="versión 8";vtag.style.cssText="text-align:center;opacity:.5;font-size:11px;margin:18px 0 6px";document.body.appendChild(vtag);
   function msg(t,ok){let b=document.getElementById("rmsg");if(!b){b=document.createElement("div");b.id="rmsg";b.onclick=()=>b.remove();document.body.appendChild(b)}
     b.textContent=t+" (tocá para cerrar)";b.style.cssText="position:fixed;left:8px;right:8px;top:calc(env(safe-area-inset-top,0px) + 8px);z-index:100;padding:12px;border-radius:12px;font-size:13px;color:#fff;background:"+(ok?"#143d30":"#4a1d1d")+";border:1px solid "+(ok?"#6fbf9f":"#e08080")}
   const viaUrl=/[?&]shared=1/.test(location.search);
@@ -829,6 +829,16 @@ $("r-save").onclick=async()=>{await _rs();if(/^✓/.test($("r-hint").textContent
     if(info)msg("Llegó el aviso de compartir pero sin archivo. Datos: "+(info.keys.join(" | ")||"nada"));
     else if(viaUrl)msg("La app se abrió por compartir pero el servicio interno no guardó nada (sin datos de compartir).");
   }catch(e){msg("Error al leer el comprobante compartido: "+e.message)}},900);
+})();
+
+/* ---- botón para elegir el comprobante a mano (no depende de "Compartir") ---- */
+(function(){
+  const b=document.createElement("button");b.type="button";b.className="btn";b.id="b-pick";b.textContent="📎 Subir comprobante";
+  b.style.cssText="margin-top:8px;width:100%";
+  const inp=document.createElement("input");inp.type="file";inp.accept="application/pdf,image/*,.pdf";inp.hidden=true;document.body.appendChild(inp);
+  b.onclick=()=>inp.click();
+  inp.onchange=()=>{const f=inp.files[0];inp.value="";if(!f)return;SH={blob:f,name:f.name||"comprobante.pdf"};openReceipt()};
+  const row=document.getElementById("b-data").parentNode;row.parentNode.insertBefore(b,row);
 })();
 
 renderMes();
