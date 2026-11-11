@@ -798,6 +798,20 @@ $("r-save").onclick=async()=>{if(!RSEL)return;const f=rfile();$("r-hint").textCo
 $("r-share").onclick=async()=>{if(!RSEL)return;const f=rfile();try{if(navigator.canShare&&navigator.canShare({files:[f]})){await navigator.share({files:[f],title:f.name});$("r-hint").textContent="Elegí la app de destino en el menú."}else{dl(f);$("r-hint").textContent="Se descargó como "+f.name+"."}}catch(e){if(e.name!=="AbortError")$("r-hint").textContent="No pude compartirlo: "+e.message}};
 document.querySelectorAll('input[name="rsel"]').forEach(()=>{});
 
+/* ---- comprobante compartido: se puede asignar a cualquier concepto del mes (pagado o pendiente) ---- */
+function openReceipt(){
+  const todayN=TY*10000+(TM+1)*100+TD;
+  const rows=monthRows(vm).filter(r=>r.c.code&&r.c.code.trim()).map(r=>{const nm=r.paid&&r.paid.file?r.paid.file:compName(r.c,todayN);return Object.assign({},r,{paid:{file:nm,d:r.paid?r.paid.d:todayN},isPaid:!!r.paid})});
+  $("r-sub").textContent=SH.name+" · "+mlabel(vm);RSEL=null;$("r-save").disabled=true;$("r-share").disabled=true;$("r-mail").disabled=true;$("r-mail").hidden=true;$("r-hint").textContent="Elegí a qué concepto corresponde este comprobante.";
+  $("r-list").innerHTML=rows.map((r,j)=>'<label class="rrow"><input type="radio" name="rsel" value="'+j+'"><span>'+r.c.n+(r.isPaid?'':' (pendiente)')+'<small>'+r.paid.file+'</small></span></label>').join("")||'<p class="hint">No hay conceptos con código de comprobante en '+mlabel(vm)+'.</p>';
+  document.querySelectorAll('input[name="rsel"]').forEach(inp=>inp.onchange=()=>{RSEL=rows[+inp.value];$("r-save").disabled=false;$("r-share").disabled=false;const m=!!MAIL[RSEL.c.n];$("r-mail").hidden=!m;$("r-mail").disabled=!m;$("r-hint").textContent="Se va a guardar como "+RSEL.paid.file+(RSEL.isPaid?"":" (con la fecha de hoy)")});
+  openSheet("rsheet");showBanner()}
+/* aviso permanente mientras haya un comprobante sin guardar */
+function showBanner(){let b=document.getElementById("rbanner");if(!b){b=document.createElement("button");b.id="rbanner";b.type="button";b.style.cssText="display:block;width:100%;margin:0 0 10px;padding:10px 12px;border-radius:12px;border:1px solid var(--accent,#6a9);background:transparent;color:inherit;font:inherit;text-align:left";const t=document.querySelector(".tabs");t.parentNode.insertBefore(b,t.nextSibling);b.onclick=()=>openReceipt()}
+  b.textContent="📎 Comprobante sin guardar: "+SH.name+" — tocá para elegir el concepto";b.hidden=false}
+const _rs=$("r-save").onclick;
+$("r-save").onclick=async()=>{await _rs();if(/^✓/.test($("r-hint").textContent)){const b=document.getElementById("rbanner");if(b)b.hidden=true}};
+
 renderMes();
 
 }
