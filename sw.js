@@ -1,4 +1,4 @@
-const V = "mp-v1";
+const V = "mp-v2";
 const SCOPE = self.registration.scope;
 const SHELL = ["./", "index.html", "manifest.webmanifest", "vendor/xlsx.full.min.js", "icon-192.png", "icon-512.png"];
 
@@ -26,6 +26,15 @@ self.addEventListener("fetch", e => {
     return;
   }
   if (req.method !== "GET" || url.origin !== location.origin) return;
+  // Páginas: primero la red (así llegan las versiones nuevas) y, sin conexión, lo guardado.
+  if (req.mode === "navigate") {
+    e.respondWith((async () => {
+      const c = await caches.open(V);
+      try { const r = await fetch(req); if (r.ok) c.put(new URL("./", SCOPE).href, r.clone()); return r; }
+      catch (err) { return (await c.match(req, { ignoreSearch: true })) || (await c.match(new URL("./", SCOPE).href)) || new Response("Sin conexión", { status: 503 }); }
+    })());
+    return;
+  }
   // Resto: primero lo guardado (rápido, anda sin conexión) y se actualiza en segundo plano.
   e.respondWith((async () => {
     const c = await caches.open(V);

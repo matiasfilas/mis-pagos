@@ -153,14 +153,19 @@ label.f{display:grid;font-size:12.5px;color:var(--muted);font-weight:500}
 
 </head><body>
 <div class="wrap" id="v-load" hidden>
-  <header><h1>Mis Pagos</h1><span class="tag">Datos</span></header>
-  <h2>Cargá tu base</h2>
+  <header><h1>Mis Pagos</h1><span class="tag">Google</span></header>
+  <h2 id="l-h">Conectá tu Google</h2>
   <div class="card" style="padding:14px">
-    <p style="margin-top:0">La app no guarda tus datos en internet: los lee de tu archivo y los deja solo en este celular.</p>
-    <label class="lab">1. Tu base de datos (BDD - Pagos.xlsx de OneDrive)<input type="file" id="f-xlsx" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" style="display:block;margin-top:6px;width:100%"></label>
-    <label class="lab" style="margin-top:14px">2. Detalle de tarjetas (tarjetas.json, opcional)<input type="file" id="f-cards" accept=".json,application/json" style="display:block;margin-top:6px;width:100%"></label>
+    <p id="l-msg" style="margin-top:0">Tus pagos se guardan en una hoja de tu propio Google Drive. Solo esta app puede ver los archivos que ella misma crea.</p>
+    <div class="row2 col"><button type="button" class="btn primary" id="l-connect">Conectar con Google</button></div>
+    <div id="l-import" hidden>
+      <p>Todavía no existe tu base en Google. Elegí tu Excel actual para crearla (se hace una sola vez; tu Excel no se modifica).</p>
+      <label class="lab">1. Tu base (BDD - Pagos.xlsx)<input type="file" id="f-xlsx" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" style="display:block;margin-top:6px;width:100%"></label>
+      <label class="lab" style="margin-top:14px">2. Detalle de tarjetas (tarjetas.json, opcional)<input type="file" id="f-cards" accept=".json,application/json" style="display:block;margin-top:6px;width:100%"></label>
+      <div class="row2 col"><button type="button" class="btn primary" id="l-go" disabled>Crear la base en Google</button></div>
+    </div>
     <div class="hint" id="l-status" style="margin-top:12px"></div>
-    <div class="row2 col"><button type="button" class="btn primary" id="l-save" disabled>Guardar y abrir la app</button><button type="button" class="btn ghost" id="l-cancel" hidden>Cancelar</button></div>
+    <div class="row2 col"><button type="button" class="btn ghost" id="l-cancel" hidden>Cancelar</button></div>
   </div>
 </div>
 
@@ -174,7 +179,8 @@ label.f{display:grid;font-size:12.5px;color:var(--muted);font-weight:500}
   </section>
   <div id="lists"></div>
   <div id="pending-box"></div>
-  <div class="note"><div>Los conceptos del mes salen de la tabla Categorias: los vigentes según Activo desde y Activo hasta. Lo que registres acá queda guardado en este celular hasta que lo pases al Excel.</div>
+  <div class="note"><div>Los conceptos del mes salen de la tabla Categorias: los vigentes según Activo desde y Activo hasta. Cada pago que registres se envía a tu hoja de Google; si no hay conexión, queda guardado acá hasta que sincronices.</div>
+  <div class="hint" id="sync-msg"></div>
   <div class="row2"><button type="button" class="btn ghost" id="b-data">Actualizar datos</button><button type="button" class="btn ghost" id="b-inst" hidden>Instalar la app</button></div></div>
 </div>
 
@@ -244,7 +250,7 @@ label.f{display:grid;font-size:12.5px;color:var(--muted);font-weight:500}
   <div class="sh-top"><div><h3 id="r-t">Comprobante recibido</h3><div class="hint" id="r-sub"></div></div><button type="button" class="xs" data-close aria-label="Cerrar">✕</button></div>
   <p class="hint">¿A qué pago corresponde? Se muestran los pagos del mes que estás viendo en la solapa Mes.</p>
   <div id="r-list"></div>
-  <div class="row2 col"><button type="button" class="btn primary" id="r-save" disabled>Renombrar y guardar en OneDrive</button><button type="button" class="btn" id="r-mail" disabled hidden>Enviar a la administración</button></div>
+  <div class="row2 col"><button type="button" class="btn primary" id="r-save" disabled>Guardar en Google Drive</button><button type="button" class="btn" id="r-share" disabled>Compartir a otra app</button><button type="button" class="btn" id="r-mail" disabled hidden>Enviar a la administración</button></div>
   <p class="hint" id="r-hint"></p>
 </div></div>
 
@@ -272,11 +278,17 @@ label.f{display:grid;font-size:12.5px;color:var(--muted);font-weight:500}
 </div></div>
 
 <script src="vendor/xlsx.full.min.js"></script>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 <script>
 const $=id=>document.getElementById(id);
+const CLIENT_ID="35082583518-7l8h2cq4duvugqis63v5sccthclgivkn.apps.googleusercontent.com";
+const SCOPE="https://www.googleapis.com/auth/drive.file";
+const BASE_NAME="Mis Pagos - Base",FOLDER_NAME="Mis Pagos - Comprobantes";
 let DATA=null,CARDS={st:[],dup:[],adj:[],miss:[]};
 try{DATA=JSON.parse(localStorage.getItem("mp-data")||"null");const c=localStorage.getItem("mp-cards");if(c)CARDS=JSON.parse(c)}catch(e){DATA=null}
+const lsGet=k=>{try{return localStorage.getItem(k)}catch(e){return null}},lsSet=(k,v)=>{try{localStorage.setItem(k,v)}catch(e){}};
 const ser2ymd=v=>{const d=new Date(Date.UTC(1899,11,30)+Math.floor(v)*864e5);return d.getUTCFullYear()*10000+(d.getUTCMonth()+1)*100+d.getUTCDate()};
+/* ---------- Excel (solo para la importación inicial) ---------- */
 function parseXlsx(buf){
   const wb=XLSX.read(buf,{type:"array"}),ws=wb.Sheets["Pagos"],cs=wb.Sheets["Cotizacion_USD"];
   if(!ws||!cs)throw new Error("No encuentro las hojas Pagos y Cotizacion_USD en el archivo.");
@@ -290,14 +302,80 @@ function parseXlsx(buf){
   const rates=[];for(let r=1;r<B.length;r++){const x=B[r];if(typeof x[0]==="number"&&typeof x[4]==="number")rates.push([ser2ymd(x[0]),Math.round(x[4]*100)/100])}
   if(!pay.length||!rates.length)throw new Error("El archivo no tiene pagos o cotizaciones.");
   return{conc,pay,rates}}
+/* ---------- Google: sesión ---------- */
+let TOKEN=null,TOKEN_EXP=0,TC=null;
+const tokenOk=()=>TOKEN&&Date.now()<TOKEN_EXP;
+let PEND=null;
+function connect(){return new Promise((res,rej)=>{
+  if(!window.google||!google.accounts)return rej(new Error("No cargó el servicio de Google. Revisá la conexión."));
+  PEND={res,rej};
+  if(!TC)TC=google.accounts.oauth2.initTokenClient({client_id:CLIENT_ID,scope:SCOPE,
+    callback:r=>{const p=PEND;PEND=null;if(!p)return;if(r.error)p.rej(new Error(r.error_description||r.error));else{TOKEN=r.access_token;TOKEN_EXP=Date.now()+((+r.expires_in||3600)-90)*1000;p.res()}},
+    error_callback:e=>{const p=PEND;PEND=null;if(p)p.rej(new Error("No se completó el inicio de sesión ("+((e&&e.type)||"cancelado")+")"))}});
+  TC.requestAccessToken({})})}
+const ensureToken=async()=>{if(!tokenOk())await connect()};
+async function gapi(url,opt={}){await ensureToken();
+  const r=await fetch(url,{...opt,headers:{Authorization:"Bearer "+TOKEN,...(opt.headers||{})}});const t=await r.text();let j;try{j=JSON.parse(t)}catch(e){j=t}
+  if(r.status===401){TOKEN=null;throw new Error("La sesión de Google venció. Tocá Conectar.")}
+  if(!r.ok)throw new Error(r.status+" "+((j&&j.error&&j.error.message)||String(t).slice(0,200)));return j}
+const JH={"Content-Type":"application/json"};
+const SH="https://sheets.googleapis.com/v4/spreadsheets/",DR="https://www.googleapis.com/drive/v3/files";
+/* ---------- Google: base de datos en una hoja ---------- */
+async function findFile(name,mime){
+  const q=encodeURIComponent("name='"+name.replace(/'/g,"\\'")+"' and mimeType='"+mime+"' and trashed=false");
+  const r=await gapi(DR+"?q="+q+"&fields=files(id,name,createdTime)&orderBy=createdTime&pageSize=5");return r.files&&r.files[0]?r.files[0].id:null}
+async function findBase(){let id=lsGet("mp-sheet");if(id)return id;id=await findFile(BASE_NAME,"application/vnd.google-apps.spreadsheet");if(id)lsSet("mp-sheet",id);return id}
+const ymdIso=n=>{const s=String(n);return s.slice(0,4)+"-"+s.slice(4,6)+"-"+s.slice(6)};
+const isoYmd=s=>+String(s).replace(/-/g,"");
+function chunk(s,n){const o=[];for(let i=0;i<s.length;i+=n)o.push(s.slice(i,i+n));return o}
+async function createBase(d,cards){
+  const s=await gapi(SH.slice(0,-1),{method:"POST",headers:JH,body:JSON.stringify({properties:{title:BASE_NAME},sheets:["Pagos","Conceptos","Cotizaciones","Config"].map(t=>({properties:{title:t}}))})});
+  const id=s.spreadsheetId;lsSet("mp-sheet",id);
+  const pagos=[["Fecha","Concepto","Importe","Moneda","ImporteUSD","Comentario"]].concat(d.pay.map(p=>[ymdIso(p[0]),d.conc[p[1]].n,p[2],d.conc[p[1]].mon,p[3],p[4]||""]));
+  const conc=[["Concepto","Categoria","CodComprobante","Rezago","Inmueble","MonedaDefecto","DiaHabitual","ActivoDesde","ActivoHasta"]].concat(d.conc.map(c=>[c.n,c.cat,c.code,c.rez,c.inm,c.mon,c.day==null?"":c.day,c.desde||"",c.hasta||""]));
+  const cot=[["Fecha","Promedio"]].concat(d.rates);
+  const cfg=[["clave","valor"]].concat(cards&&cards.st&&cards.st.length?chunk(JSON.stringify(cards),40000).map((x,i)=>["tarjetas_"+i,x]):[]);
+  await gapi(SH+id+"/values:batchUpdate",{method:"POST",headers:JH,body:JSON.stringify({valueInputOption:"RAW",data:[{range:"Pagos!A1",values:pagos},{range:"Conceptos!A1",values:conc},{range:"Cotizaciones!A1",values:cot},{range:"Config!A1",values:cfg}]})});
+  return id}
+async function loadBase(id){
+  const q=["Pagos!A2:F","Conceptos!A2:I","Cotizaciones!A2:B","Config!A2:B"].map(r=>"ranges="+encodeURIComponent(r)).join("&");
+  const r=await gapi(SH+id+"/values:batchGet?valueRenderOption=UNFORMATTED_VALUE&"+q);const V=r.valueRanges.map(x=>x.values||[]);
+  const conc=V[1].map(x=>({n:x[0],cat:x[1],code:x[2]||"",rez:+x[3]||0,inm:x[4]||"Sin asignar",mon:x[5]||"Pesos",day:x[6]===""||x[6]==null?null:+x[6],desde:x[7]?+x[7]:null,hasta:x[8]?+x[8]:null}));
+  const idx={};conc.forEach((c,i)=>idx[c.n]=i);
+  const pay=V[0].filter(x=>x[0]&&idx[x[1]]!==undefined).map(x=>[isoYmd(x[0]),idx[x[1]],+x[2],+x[4]||0,x[5]||null]).sort((a,b)=>a[0]-b[0]);
+  const rates=V[2].filter(x=>x[0]).map(x=>[+x[0],+x[1]]);
+  const cfg=V[3].filter(x=>String(x[0]).startsWith("tarjetas_")).sort((a,b)=>String(a[0]).localeCompare(String(b[0]),undefined,{numeric:true}));
+  let cards={st:[],dup:[],adj:[],miss:[]};if(cfg.length){try{cards=JSON.parse(cfg.map(x=>x[1]).join(""))}catch(e){}}
+  return{data:{conc,pay,rates},cards}}
+function cacheData(d,c){lsSet("mp-data",JSON.stringify(d));lsSet("mp-cards",JSON.stringify(c))}
+/* ---------- Google: comprobantes en Drive ---------- */
+async function ensureFolder(){let id=lsGet("mp-folder");if(id)return id;
+  id=await findFile(FOLDER_NAME,"application/vnd.google-apps.folder");
+  if(!id){const f=await gapi(DR+"?fields=id",{method:"POST",headers:JH,body:JSON.stringify({name:FOLDER_NAME,mimeType:"application/vnd.google-apps.folder"})});id=f.id}
+  lsSet("mp-folder",id);return id}
+async function uploadReceipt(file){const folder=await ensureFolder();
+  const fd=new FormData();fd.append("metadata",new Blob([JSON.stringify({name:file.name,parents:[folder]})],{type:"application/json"}));fd.append("file",file);
+  return gapi("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink",{method:"POST",body:fd})}
+/* ---------- pagos nuevos hacia la hoja ---------- */
+async function appendPayments(rows){const id=await findBase();if(!id)throw new Error("No encuentro tu base en Google.");
+  return gapi(SH+id+"/values/Pagos!A:F:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS",{method:"POST",headers:JH,body:JSON.stringify({values:rows})})}
+/* ---------- pantalla de conexión / importación ---------- */
 let LD=null,LC=null;
-function showLoader(canCancel){["v-mes","v-an","v-tj"].forEach(x=>$(x).hidden=true);document.querySelector(".tabs").hidden=true;$("v-load").hidden=false;$("l-cancel").hidden=!canCancel;
-  $("f-xlsx").onchange=async e=>{const f=e.target.files[0];LD=null;$("l-save").disabled=true;if(!f)return;$("l-status").textContent="Leyendo…";
-    try{LD=parseXlsx(await f.arrayBuffer());const l=LD.pay[LD.pay.length-1][0],s=String(l);$("l-status").textContent=LD.conc.length+" conceptos, "+LD.pay.length+" pagos, último pago el "+s.slice(6)+"/"+s.slice(4,6)+"/"+s.slice(0,4)+".";$("l-save").disabled=false}
+function show(id,on){$(id).hidden=!on}
+function showLoader(canCancel){["v-mes","v-an","v-tj"].forEach(x=>$(x).hidden=true);document.querySelector(".tabs").hidden=true;show("v-load",true);show("l-cancel",!!canCancel);
+  $("l-cancel").onclick=()=>location.reload();$("l-status").textContent="";
+  $("l-connect").onclick=async()=>{$("l-status").textContent="Conectando…";
+    try{await connect();$("l-status").textContent="Buscando tu base en Drive…";const id=await findBase();
+      if(id){$("l-status").textContent="Leyendo tus datos…";const r=await loadBase(id);cacheData(r.data,r.cards);location.reload()}
+      else{show("l-connect",false);show("l-import",true);$("l-status").textContent="Conectado. Falta crear tu base."}
+    }catch(e){$("l-status").textContent="✗ "+e.message}};
+  $("f-xlsx").onchange=async e=>{const f=e.target.files[0];LD=null;$("l-go").disabled=true;if(!f)return;$("l-status").textContent="Leyendo el archivo…";
+    try{LD=parseXlsx(await f.arrayBuffer());const s=String(LD.pay[LD.pay.length-1][0]);$("l-status").textContent=LD.conc.length+" conceptos, "+LD.pay.length+" pagos, último pago el "+s.slice(6)+"/"+s.slice(4,6)+"/"+s.slice(0,4)+".";$("l-go").disabled=false}
     catch(err){$("l-status").textContent="No pude leer el archivo: "+err.message}};
   $("f-cards").onchange=async e=>{const f=e.target.files[0];LC=null;if(!f)return;try{const j=JSON.parse(await f.text());if(!j.st)throw new Error("no es un archivo de tarjetas");LC=j}catch(err){$("l-status").textContent="El archivo de tarjetas no sirve: "+err.message}};
-  $("l-save").onclick=()=>{try{localStorage.setItem("mp-data",JSON.stringify(LD));if(LC)localStorage.setItem("mp-cards",JSON.stringify(LC));location.reload()}catch(err){$("l-status").textContent="No pude guardar en el celular: "+err.message}};
-  $("l-cancel").onclick=()=>location.reload()}
+  $("l-go").onclick=async()=>{$("l-go").disabled=true;$("l-status").textContent="Creando tu base en Google (puede tardar unos segundos)…";
+    try{const id=await createBase(LD,LC);const r=await loadBase(id);cacheData(r.data,r.cards);$("l-status").textContent="✓ Base creada. Abriendo…";setTimeout(()=>location.reload(),600)}
+    catch(err){$("l-status").textContent="✗ "+err.message;$("l-go").disabled=false}}}
 if("serviceWorker" in navigator)navigator.serviceWorker.register("sw.js").catch(()=>{});
 function main(){
 
@@ -681,9 +759,9 @@ function mailData(ci,i){const c=CONC[ci],u=MAIL[c.n];let ey=Y0+Math.floor(i/12),
   return{u,subject:"Pago de expensas de "+MES[em]+" "+ey+" - "+u.unit,body:"Buenos días,\nA continuación adjunto comprobante de pago correspondiente a las expensas del mes de "+MES[em]+" con vencimiento en "+MES[i%12]+" de "+u.unit+".\nSaludos."}}
 function openReceipt(){
   const rows=monthRows(vm).filter(r=>r.paid&&r.paid.file);
-  $("r-sub").textContent=SH.name+" · "+mlabel(vm);RSEL=null;$("r-save").disabled=true;$("r-mail").disabled=true;$("r-mail").hidden=true;$("r-hint").textContent="";
+  $("r-sub").textContent=SH.name+" · "+mlabel(vm);RSEL=null;$("r-save").disabled=true;$("r-share").disabled=true;$("r-mail").disabled=true;$("r-mail").hidden=true;$("r-hint").textContent="";
   $("r-list").innerHTML=rows.length?rows.sort((a,b)=>b.paid.d-a.paid.d).map((r,j)=>'<label class="rrow"><input type="radio" name="rsel" value="'+j+'"><span>'+r.c.n+'<small>'+r.paid.file+'</small></span></label>').join(""):'<p class="hint">No hay pagos con comprobante en '+mlabel(vm)+'. Registrá el pago primero y volvé a compartir el archivo, o cambiá de mes en la solapa Mes.</p>';
-  document.querySelectorAll('input[name="rsel"]').forEach(inp=>inp.onchange=()=>{RSEL=rows[+inp.value];$("r-save").disabled=false;const m=!!MAIL[RSEL.c.n];$("r-mail").hidden=!m;$("r-mail").disabled=!m});
+  document.querySelectorAll('input[name="rsel"]').forEach(inp=>inp.onchange=()=>{RSEL=rows[+inp.value];$("r-save").disabled=false;$("r-share").disabled=false;const m=!!MAIL[RSEL.c.n];$("r-mail").hidden=!m;$("r-mail").disabled=!m});
   openSheet("rsheet")}
 const rfile=()=>{const ext=(SH.name.match(/\.[A-Za-z0-9]+$/)||[".pdf"])[0];return new File([SH.blob],RSEL.paid.file+ext,{type:SH.blob.type||"application/pdf"})};
 function dl(f){const a=document.createElement("a");a.href=URL.createObjectURL(f);a.download=f.name;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},1500)}
@@ -692,6 +770,33 @@ $("r-mail").onclick=async()=>{if(!RSEL)return;const f=rfile(),d=mailData(RSEL.ci
   try{await navigator.clipboard.writeText(u.to+", "+u.cc)}catch(e){}
   try{if(navigator.canShare&&navigator.canShare({files:[f]})){await navigator.share({files:[f],title:d.subject,text:d.body});$("r-hint").textContent="Elegí tu app de correo. Los destinatarios quedaron copiados: para "+u.to+" y copia a "+u.cc+"."}else{dl(f);$("r-hint").textContent="Se descargó el comprobante. Abrí el aviso desde el pago para armar el mail."}}catch(e){if(e.name!=="AbortError")$("r-hint").textContent="No pude compartirlo: "+e.message}};
 (async()=>{if(!/[?&]shared=1/.test(location.search))return;try{const c=await caches.open("mp-shared"),r=await c.match(new URL("shared-file",location.href));history.replaceState(null,"",location.pathname);if(!r)return;const blob=await r.blob();SH={blob,name:decodeURIComponent(r.headers.get("X-Name")||"comprobante.pdf")};await c.delete(new URL("shared-file",location.href));openReceipt()}catch(e){}})();
+/* ============ Google: sincronización y comprobantes ============ */
+function renderPending(){
+  const ks=Object.keys(ST.newp),el=$("pending-box");
+  if(!ks.length){el.innerHTML="";return}
+  el.innerHTML='<div class="pend-card"><b>'+ks.length+(ks.length===1?" pago sin sincronizar":" pagos sin sincronizar")+'</b><span class="hint">Están guardados en este dispositivo y todavía no se enviaron a tu hoja de Google.</span><button type="button" class="btn primary" id="b-exp">Sincronizar ahora</button></div>';
+  $("b-exp").onclick=syncNow}
+function setSync(t,bad){$("sync-msg").textContent=t||"";$("sync-msg").style.color=bad?"var(--warn)":""}
+let syncing=false;
+async function syncNow(){if(syncing)return;syncing=true;
+  try{setSync("Conectando con Google…");await ensureToken();
+    const L=newList();
+    if(L.length){setSync("Enviando "+L.length+(L.length===1?" pago…":" pagos…"));
+      await appendPayments(L.map(x=>[ymdIso(x.d),CONC[x.ci].n,x.amt,CONC[x.ci].mon,CONC[x.ci].mon==="USD"?x.amt:Math.round(x.amt/rateAt(x.d)*100)/100,x.cm||""]));
+      const d=JSON.parse(JSON.stringify(DATA));L.forEach(x=>d.pay.push([x.d,x.ci,x.amt,CONC[x.ci].mon==="USD"?x.amt:Math.round(x.amt/rateAt(x.d)*100)/100,x.cm||null]));d.pay.sort((a,b)=>a[0]-b[0]);
+      ST.newp={};save();cacheData(d,CARDS)}
+    setSync("Actualizando datos…");const id=await findBase();const r=await loadBase(id);cacheData(r.data,r.cards);
+    setSync("✓ Sincronizado");setTimeout(()=>location.reload(),500)
+  }catch(e){setSync("✗ "+e.message,true);syncing=false}}
+$("b-data").textContent="Sincronizar con Google";$("b-data").onclick=syncNow;
+// pago recién tildado: si ya hay sesión de Google, se envía solo
+const _okPay=$("p-ok").onclick;
+$("p-ok").onclick=()=>{_okPay();if(tokenOk())syncNow()};
+$("r-save").textContent="Guardar en Google Drive";
+$("r-save").onclick=async()=>{if(!RSEL)return;const f=rfile();$("r-hint").textContent="Subiendo…";
+  try{const u=await uploadReceipt(f);$("r-hint").textContent="✓ Guardado en tu Drive, carpeta \""+FOLDER_NAME+"\", como "+u.name+"."}catch(e){$("r-hint").textContent="✗ "+e.message}};
+$("r-share").onclick=async()=>{if(!RSEL)return;const f=rfile();try{if(navigator.canShare&&navigator.canShare({files:[f]})){await navigator.share({files:[f],title:f.name});$("r-hint").textContent="Elegí la app de destino en el menú."}else{dl(f);$("r-hint").textContent="Se descargó como "+f.name+"."}}catch(e){if(e.name!=="AbortError")$("r-hint").textContent="No pude compartirlo: "+e.message}};
+document.querySelectorAll('input[name="rsel"]').forEach(()=>{});
 
 renderMes();
 
