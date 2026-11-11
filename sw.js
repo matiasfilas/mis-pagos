@@ -1,4 +1,4 @@
-const V = "mp-v2";
+const V = "mp-v3";
 const SCOPE = self.registration.scope;
 const SHELL = ["./", "index.html", "manifest.webmanifest", "vendor/xlsx.full.min.js", "icon-192.png", "icon-512.png"];
 
@@ -16,6 +16,9 @@ self.addEventListener("fetch", e => {
       try {
         const fd = await req.formData();
         const f = fd.get("file");
+        const keys = []; for (const [k, v] of fd.entries()) keys.push(k + ":" + (typeof v === "string" ? "texto(" + v.length + ")" : (v.name || "") + "/" + v.type + "/" + v.size));
+        const ci = await caches.open("mp-shared");
+        await ci.put(new URL("shared-info", SCOPE), new Response(JSON.stringify({ t: Date.now(), keys })));
         if (f && f.size) {
           const c = await caches.open("mp-shared");
           await c.put(new URL("shared-file", SCOPE), new Response(f, { headers: { "X-Name": encodeURIComponent(f.name || "comprobante.pdf"), "Content-Type": f.type || "application/octet-stream" } }));
