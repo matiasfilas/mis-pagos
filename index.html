@@ -807,23 +807,28 @@ function openReceipt(){
   document.querySelectorAll('input[name="rsel"]').forEach(inp=>inp.onchange=()=>{RSEL=rows[+inp.value];$("r-save").disabled=false;$("r-share").disabled=false;const m=!!MAIL[RSEL.c.n];$("r-mail").hidden=!m;$("r-mail").disabled=!m;$("r-hint").textContent="Se va a guardar como "+RSEL.paid.file+(RSEL.isPaid?"":" (con la fecha de hoy)")});
   openSheet("rsheet");showBanner()}
 /* aviso permanente mientras haya un comprobante sin guardar */
-function showBanner(){let b=document.getElementById("rbanner");if(!b){b=document.createElement("button");b.id="rbanner";b.type="button";b.style.cssText="display:block;width:100%;margin:0 0 10px;padding:10px 12px;border-radius:12px;border:1px solid var(--accent,#6a9);background:transparent;color:inherit;font:inherit;text-align:left";const t=document.querySelector(".tabs");t.parentNode.insertBefore(b,t.nextSibling);b.onclick=()=>openReceipt()}
+function showBanner(){let b=document.getElementById("rbanner");if(!b){b=document.createElement("button");b.id="rbanner";b.type="button";b.style.cssText="position:fixed;left:8px;right:8px;top:calc(env(safe-area-inset-top,0px) + 8px);z-index:99;padding:12px;border-radius:12px;border:1px solid #6fbf9f;background:#143d30;color:#fff;font:inherit;text-align:left";document.body.appendChild(b);b.onclick=()=>openReceipt()}
   b.textContent="📎 Comprobante sin guardar: "+SH.name+" — tocá para elegir el concepto";b.hidden=false}
 const _rs=$("r-save").onclick;
 $("r-save").onclick=async()=>{await _rs();if(/^✓/.test($("r-hint").textContent)){const b=document.getElementById("rbanner");if(b)b.hidden=true}};
 
 /* ---- diagnóstico y rescate del comprobante compartido ---- */
 (function(){
-  const vtag=document.createElement("div");vtag.textContent="versión 6";vtag.style.cssText="text-align:center;opacity:.5;font-size:11px;margin:18px 0 6px";document.body.appendChild(vtag);
+  const vtag=document.createElement("div");vtag.textContent="versión 7";vtag.style.cssText="text-align:center;opacity:.5;font-size:11px;margin:18px 0 6px";document.body.appendChild(vtag);
+  function msg(t,ok){let b=document.getElementById("rmsg");if(!b){b=document.createElement("div");b.id="rmsg";b.onclick=()=>b.remove();document.body.appendChild(b)}
+    b.textContent=t+" (tocá para cerrar)";b.style.cssText="position:fixed;left:8px;right:8px;top:calc(env(safe-area-inset-top,0px) + 8px);z-index:100;padding:12px;border-radius:12px;font-size:13px;color:#fff;background:"+(ok?"#143d30":"#4a1d1d")+";border:1px solid "+(ok?"#6fbf9f":"#e08080")}
+  const viaUrl=/[?&]shared=1/.test(location.search);
+  if(viaUrl)msg("Recibí el aviso de compartir. Buscando el archivo…",true);
   setTimeout(async()=>{try{
     const c=await caches.open("mp-shared");
     const ri=await c.match(new URL("shared-info",location.href));
-    if(ri){const info=await ri.json();await c.delete(new URL("shared-info",location.href));
-      const rf=await c.match(new URL("shared-file",location.href));
-      if(rf&&!SH){const blob=await rf.blob();SH={blob,name:decodeURIComponent(rf.headers.get("X-Name")||"comprobante.pdf")};await c.delete(new URL("shared-file",location.href));openReceipt()}
-      else if(!rf&&!SH){alert_msg("Llegó el aviso de compartir, pero sin archivo. Datos recibidos: "+(info.keys.join(" | ")||"nada"))}}
-  }catch(e){alert_msg("Error al leer el comprobante compartido: "+e.message)}},700);
-  function alert_msg(t){const b=document.createElement("div");b.textContent=t;b.style.cssText="margin:0 0 10px;padding:10px 12px;border-radius:12px;border:1px solid #c66;font-size:13px";const tb=document.querySelector(".tabs");tb.parentNode.insertBefore(b,tb.nextSibling)}
+    const info=ri?await ri.json():null;if(ri)await c.delete(new URL("shared-info",location.href));
+    if(SH){const m=document.getElementById("rmsg");if(m)m.remove();return}
+    const rf=await c.match(new URL("shared-file",location.href));
+    if(rf){const blob=await rf.blob();SH={blob,name:decodeURIComponent(rf.headers.get("X-Name")||"comprobante.pdf")};await c.delete(new URL("shared-file",location.href));const m=document.getElementById("rmsg");if(m)m.remove();openReceipt();return}
+    if(info)msg("Llegó el aviso de compartir pero sin archivo. Datos: "+(info.keys.join(" | ")||"nada"));
+    else if(viaUrl)msg("La app se abrió por compartir pero el servicio interno no guardó nada (sin datos de compartir).");
+  }catch(e){msg("Error al leer el comprobante compartido: "+e.message)}},900);
 })();
 
 renderMes();
