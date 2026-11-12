@@ -353,7 +353,13 @@ async function ensureFolder(){let id=lsGet("mp-folder");if(id)return id;
   id=await findFile(FOLDER_NAME,"application/vnd.google-apps.folder");
   if(!id){const f=await gapi(DR+"?fields=id",{method:"POST",headers:JH,body:JSON.stringify({name:FOLDER_NAME,mimeType:"application/vnd.google-apps.folder"})});id=f.id}
   lsSet("mp-folder",id);return id}
-async function uploadReceipt(file){const folder=await ensureFolder();
+async function ensureSub(parent,name){let m={};try{m=JSON.parse(lsGet("mp-sub")||"{}")}catch(e){}const k=parent+"|"+name;if(m[k])return m[k];
+  const q=encodeURIComponent("name='"+name.replace(/'/g,"\\'")+"' and mimeType='application/vnd.google-apps.folder' and '"+parent+"' in parents and trashed=false");
+  const r=await gapi(DR+"?q="+q+"&fields=files(id)&pageSize=1");let id=r.files&&r.files[0]?r.files[0].id:null;
+  if(!id){const f=await gapi(DR+"?fields=id",{method:"POST",headers:JH,body:JSON.stringify({name,mimeType:"application/vnd.google-apps.folder",parents:[parent]})});id=f.id}
+  m[k]=id;lsSet("mp-sub",JSON.stringify(m));return id}
+async function uploadReceipt(file,cat,year){let folder=await ensureFolder();
+  if(cat)folder=await ensureSub(folder,cat);if(year)folder=await ensureSub(folder,String(year));
   const fd=new FormData();fd.append("metadata",new Blob([JSON.stringify({name:file.name,parents:[folder]})],{type:"application/json"}));fd.append("file",file);
   return gapi("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink",{method:"POST",body:fd})}
 /* ---------- pagos nuevos hacia la hoja ---------- */
@@ -794,7 +800,7 @@ const _okPay=$("p-ok").onclick;
 $("p-ok").onclick=()=>{_okPay();if(tokenOk())syncNow()};
 $("r-save").textContent="Guardar en Google Drive";
 $("r-save").onclick=async()=>{if(!RSEL)return;const f=rfile();$("r-hint").textContent="Subiendo…";
-  try{const u=await uploadReceipt(f);$("r-hint").textContent="✓ Guardado en tu Drive, carpeta \""+FOLDER_NAME+"\", como "+u.name+"."}catch(e){$("r-hint").textContent="✗ "+e.message}};
+  try{const yr=(f.name.match(/^\d{4}/)||[String(TY)])[0],cat=RSEL.c.cat||"Varios";const u=await uploadReceipt(f,cat,yr);$("r-hint").textContent="✓ Guardado en tu Drive: "+FOLDER_NAME+" / "+cat+" / "+yr+" / "+u.name}catch(e){$("r-hint").textContent="✗ "+e.message}};
 $("r-share").onclick=async()=>{if(!RSEL)return;const f=rfile();try{if(navigator.canShare&&navigator.canShare({files:[f]})){await navigator.share({files:[f],title:f.name});$("r-hint").textContent="Elegí la app de destino en el menú."}else{dl(f);$("r-hint").textContent="Se descargó como "+f.name+"."}}catch(e){if(e.name!=="AbortError")$("r-hint").textContent="No pude compartirlo: "+e.message}};
 document.querySelectorAll('input[name="rsel"]').forEach(()=>{});
 
@@ -814,7 +820,7 @@ $("r-save").onclick=async()=>{await _rs();if(/^✓/.test($("r-hint").textContent
 
 /* ---- diagnóstico y rescate del comprobante compartido ---- */
 (function(){
-  const vtag=document.createElement("div");vtag.textContent="versión 10";vtag.style.cssText="text-align:center;opacity:.5;font-size:11px;margin:18px 0 6px";document.body.appendChild(vtag);
+  const vtag=document.createElement("div");vtag.textContent="versión 11";vtag.style.cssText="text-align:center;opacity:.5;font-size:11px;margin:18px 0 6px";document.body.appendChild(vtag);
   function msg(t,ok){let b=document.getElementById("rmsg");if(!b){b=document.createElement("div");b.id="rmsg";b.onclick=()=>b.remove();document.body.appendChild(b)}
     b.textContent=t+" (tocá para cerrar)";b.style.cssText="position:fixed;left:8px;right:8px;top:calc(env(safe-area-inset-top,0px) + 8px);z-index:100;padding:12px;border-radius:12px;font-size:13px;color:#fff;background:"+(ok?"#143d30":"#4a1d1d")+";border:1px solid "+(ok?"#6fbf9f":"#e08080")}
   const viaUrl=/[?&]shared=1/.test(location.search);
