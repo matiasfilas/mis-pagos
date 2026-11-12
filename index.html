@@ -259,7 +259,8 @@ label.f{display:grid;font-size:12.5px;color:var(--muted);font-weight:500}
   <div class="two"><label class="f" for="p-amt"><span id="p-amt-l">Monto pagado</span><input id="p-amt" type="text" inputmode="decimal" autocomplete="off"></label>
   <label class="f" for="p-date">Fecha de pago<input id="p-date" type="date"></label></div>
   <div class="var" id="p-var"></div>
-  <div><div class="lab">Comprobante</div><div class="file" id="p-name" style="margin-top:4px"></div><div class="hint" style="margin-top:4px">En la versión real se sube a OneDrive con este nombre.</div></div>
+  <label class="f" for="p-cm">Comentario (opcional)<input id="p-cm" type="text" autocomplete="off" maxlength="200" placeholder="Ej.: pago anual completo"></label>
+  <div><div class="lab">Comprobante</div><div class="file" id="p-name" style="margin-top:4px"></div><div class="hint" style="margin-top:4px">Se guarda en tu Drive con este nombre.</div></div>
   <div class="row"><button type="button" class="btn" data-close>Cancelar</button><button type="button" class="btn primary" id="p-ok">Marcar como pagado</button></div>
 </div></div>
 
@@ -279,6 +280,156 @@ label.f{display:grid;font-size:12.5px;color:var(--muted);font-weight:500}
 
 <script src="vendor/xlsx.full.min.js"></script>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
+<script>
+// Reconstruye texto "con layout" (como pdftotext -layout) desde los items de pdf.js
+async function pdfText(pdf, CW){
+  CW = CW || 4.2; let out=[];
+  for(let p=1;p<=pdf.numPages;p++){
+    const page=await pdf.getPage(p), tc=await page.getTextContent();
+    const items=tc.items.filter(i=>i.str&&i.str.trim()!=="").map(i=>({s:i.str,x:i.transform[4],y:i.transform[5],w:i.width}));
+    items.sort((a,b)=>b.y-a.y||a.x-b.x);
+    const rows=[];
+    for(const it of items){const r=rows.find(r=>Math.abs(r.y-it.y)<=2.5);if(r)r.it.push(it);else rows.push({y:it.y,it:[it]})}
+    rows.sort((a,b)=>b.y-a.y);
+    for(const r of rows){r.it.sort((a,b)=>a.x-b.x);let line="",end=-1e9;
+      for(const it of r.it){const col=Math.round(it.x/CW);
+        if(line.length===0){line=" ".repeat(Math.max(col,0))+it.s}
+        else{ if(col>line.length)line+=" ".repeat(col-line.length); else line+=" "; line+=it.s }
+      }
+      out.push(line.replace(/\s+$/,""))}
+    out.push("\f");
+  }
+  return out.join("\n");
+}
+
+
+/* Lectura de resúmenes de tarjeta (Galicia VISA / Mastercard) — corre en el navegador y en node */
+(function(root){
+const num=s=>parseFloat(s.replace(/\./g,"").replace(",","."));
+const MON={Ene:1,Feb:2,Mar:3,Abr:4,May:5,Jun:6,Jul:7,Ago:8,Sep:9,Oct:10,Nov:11,Dic:12};
+const AMT="(-?[\\d.]+,\\d\\d)";
+const pad=n=>String(n).padStart(2,"0");
+const r2=x=>Math.round(x*100)/100;
+
+/* ---- VISA, formato 2025–jun 2026 ---- */
+function parseVisaA(t){
+  const mc=t.match(/(\d\d)-(\w{3})-(\d\d)\s+(\d\d-\w{3}-\d\d)\s+(\d\d)-(\w{3})-(\d\d)\s+(\d\d-\w{3}-\d\d)/);
+  const cierre="20"+mc[7]+"-"+pad(MON[mc[6]])+"-"+mc[5];
+  const mt=t.match(/TOTAL A PAGAR\s+([\d.]+,\d\d)\s+([\d.]+,\d\d)/);
+  const tp=num(mt[1]),tu=num(mt[2]);
+  const i=t.indexOf("DETALLE DEL CONSUMO"),j=t.indexOf("TOTAL A PAGAR",i);
+  const out=[];let buf=[];
+  for(const l of t.slice(i,j).split("\n")){
+    let m=l.match(new RegExp("^\\s*(\\d\\d-\\d\\d-\\d\\d)\\s+(?:[*K]\\s+)?(.+?)\\s*USD\\s+[\\d.,]+\\s+\\d{5,6}\\s+"+AMT+"\\s*$"));
+    if(m){buf.push({f:m[1],d:m[2].trim(),q:null,p:0,u:num(m[3])});continue}
+    m=l.match(new RegExp("^\\s*(\\d\\d-\\d\\d-\\d\\d)\\s+(?:[*K]\\s+)?(.+?)\\s{2,}(?:(\\d\\d/\\d\\d)\\s+)?(\\d{5,6})\\s+"+AMT+"\\s*$"));
+    if(m){buf.push({f:m[1],d:m[2].trim(),q:m[3]||null,p:num(m[5]),u:0});continue}
+    m=l.match(/^\s*TARJETA (\d{4}) Total Consumos/);
+    if(m){for(const r of buf)r.card=m[1];out.push(...buf);buf=[];continue}
+    m=l.match(new RegExp("^\\s*(\\d\\d-\\d\\d-\\d\\d)\\s+(IMPUESTO|INTERESES|DB|COMISION|SEGURO|IVA|PERCEP)(.*?)\\s{2,}"+AMT+"\\s*$"));
+    if(m)out.push({f:m[1],d:(m[2]+m[3]).trim(),q:null,p:num(m[4]),u:0,card:"-",tax:true});
+  }
+  return{cierre,total:tp,usd:tu,rows:out,pagos:pagosVisa(t)};
+}
+/* ---- VISA, formato nuevo (desde oct 2026): "CIERRE ACTUAL: 22 Oct 26" ---- */
+function parseVisaB(t){
+  const mc=t.match(/CIERRE ACTUAL:\s*(\d\d)\s+(\w{3})\s+(\d\d)/);
+  const cierre="20"+mc[3]+"-"+pad(MON[mc[2]])+"-"+mc[1];
+  const ms=t.match(/SALDO ACTUAL\s+\$\s+([\d.]+,\d\d)/);const tp=num(ms[1]);
+  const mu=t.match(/VENCIMIENTO\s+SALDO \$\s+SALDO U\$S[^\n]*\n\s*\d\d \w{3} \d\d\s+[\d.]+,\d\d\s+([\d.]+,\d\d)/);
+  const out=[];let buf=[];
+  for(const l of t.split("\n")){
+    let m=l.match(new RegExp("^\\s*(\\d\\d\\.\\d\\d\\.\\d\\d)\\s+(IMPUESTO|INTERESES|DB|COMISION|SEGURO|IVA|PERCEP)(.*?)\\s+\\$\\s+([\\d.]+,\\d\\d)\\s*$"));
+    if(m){out.push({f:m[1].replace(/\./g,"-"),d:(m[2]+m[3]).trim(),q:null,p:num(m[4]),u:0,card:"-",tax:true});continue}
+    m=l.match(/^\s*(\d\d\.\d\d\.\d\d)\s+(\S+)\s+(.+?)\s{2,}(?:Cuota\s+\d\d\/\d\d\s+)?([\d.]+,\d\d)\s*$/);
+    if(m&&!/SU PAGO/.test(m[3])){buf.push({f:m[1].replace(/\./g,"-"),d:m[3].replace(/\s+Cuota.*/,"").trim(),q:null,p:num(m[4]),u:0});continue}
+    m=l.match(/^\s*Tarjeta (\d{4}) Total Consumos/);
+    if(m){for(const x of buf)x.card=m[1];out.push(...buf);buf=[]}
+  }
+  return{cierre,total:tp,usd:mu?num(mu[1]):0,rows:out,pagos:pagosVisa(t)};
+}
+function pagosVisa(t){const o=[];for(const l of t.split("\n")){const m=l.match(/^\s*(\d\d)[-.](\d\d)[-.](\d\d)\s+SU PAGO EN PESOS\s+(?:\$\s+)?(-?[\d.]+,\d\d)(-?)/);if(m){let v=num(m[4]);if(m[5]==="-")v=-v;o.push([20000000+ +m[3]*10000+ +m[2]*100+ +m[1],Math.abs(v)])}}return o}
+
+/* ---- Mastercard ---- */
+function parseMC(t){
+  let m=t.match(/(\d\d)-(\w{3})-(\d\d)\s+(\d\d-\w{3}-\d\d)\s+(\d\d)-(\w{3})-(\d\d)/);
+  const cierre="20"+m[7]+"-"+pad(MON[m[6]])+"-"+m[5];
+  const mt=t.match(new RegExp("TOTAL A PAGAR\\s+"+AMT+"(?:\\s+"+AMT+")?"));const tp=num(mt[1]),tu=mt[2]?num(mt[2]):0;
+  const cons=t.slice(t.indexOf("SUBTOTAL"),t.indexOf("TOTAL A PAGAR"));
+  const rows=[];
+  for(const l of cons.split("\n").slice(1)){
+    const x=l.match(new RegExp("^\\s+([A-ZÁÉÍÓÚ][A-ZÁÉÍÓÚ .\\d%/\\-,()ñÑ]+?)\\s{2,}"+AMT+"(?:\\s+"+AMT+")?\\s*$"));
+    if(x)rows.push({f:cierre,d:x[1].trim(),q:null,p:num(x[2]),u:x[3]?num(x[3]):0,tax:true,sec:"Impuestos"});
+  }
+  const i=t.indexOf("DETALLE DEL CONSUMO");let sec="";
+  for(const l of t.slice(i).split("\n")){
+    const s=l.trim();
+    if(["COMPRAS DEL MES","DEBITOS AUTOMATICOS","CUOTA DEL MES"].includes(s)||(/^[A-ZÁÉÍÓÚ ]{6,}$/.test(s)&&!/DETALLE|FECHA|SUBTOTAL|TOTAL|RESUMEN|CUOTAS|OPCIONES/.test(s)))sec=s;
+    const mm=l.match(new RegExp("^\\s*(\\d\\d-\\w{3}-\\d\\d)\\s+(.+?)\\s{2,}(?:(\\d\\d/\\d\\d)\\s+)?(\\d{5})\\s+(?:"+AMT+")?(?:\\s+"+AMT+")?\\s*$"));
+    if(mm&&(mm[5]||mm[6])){
+      let p,u;
+      if(mm[5]&&mm[6]){p=num(mm[5]);u=num(mm[6])}
+      else if(mm[5]){const x=num(mm[5]);const col=l.lastIndexOf(mm[5])+mm[5].length;(col<=COLMC)?(p=x,u=0):(p=0,u=x)}
+      else{p=0;u=num(mm[6])}
+      rows.push({f:mm[1],d:mm[2].trim(),q:mm[3]||null,p,u,sec});
+    }
+  }
+  return{cierre,total:tp,usd:tu,rows,pagos:[]};
+}
+let COLMC=130;
+function parseStatement(text){
+  if(/CIERRE ACTUAL:\s*\d\d\s+\w{3}\s+\d\d/.test(text)&&/Tarjeta \d{4} Total Consumos/.test(text))return{k:"VISA",...parseVisaB(text)};
+  if(/DETALLE DEL CONSUMO/.test(text)&&/TOTAL A PAGAR/.test(text)){
+    if(/Mastercard|MASTERCARD|Master Card/i.test(text.slice(0,1500))||/SUBTOTAL/.test(text)&&!/TARJETA \d{4} Total Consumos/.test(text))return{k:"MC",...parseMC(text)};
+    return{k:"VISA",...parseVisaA(text)};
+  }
+  throw new Error("No reconozco el formato de este resumen (no parece Visa ni Mastercard de Galicia).");
+}
+root.CardsLib={parseStatement,parseVisaA,parseVisaB,parseMC,num,r2,setColMC:v=>COLMC=v};
+
+/* ---- clasificación y armado del resumen ---- */
+const RULES=[["Impuestos y tasas","MUNICIPALIDAD"],
+["Supermercado y almacén","AN[ÓO]?NIMA|AN NIMA|JUMBO|OBRERA|CHANGOMAS|HIPER|MARKET|LAESQUINA|LA ESQUINA|GRANJA|POLLERIA|CARNICERIA|CARNES|PANIFICADORA|ELEDEN|LIBERTAD|SANTA LUCIA|BARILE|BRIKA|NESCARO|PATAGONIACARN|MERAKY|ESTANCO|CARINAE|CDHCOMODORO|MIMO|COTO|VEA |HORNERO|MINI MARKET|ESMACOLSA|CARDINAL|PAMPAGONIA|DUENDE|LA ROCA|FACUSEL|QUONAM|MICA S|EMSRL|AMULEM|SEBALA|PARAGUAY|CARREFOUR|MERCADITO|DISTRIBUIDORA|DAILY MEALS|BALLENAFRANCA"],
+["Combustible","COMBUSTIBLE|ESTACION DE SERVICIO|EESS|ACA |YPF|PETRO|EG3|PETROSAN|EST SERV|E DE SERV|CYL|AXION|MODOQRI\\*EST"],
+["Gastronomía","BREWING|FUDO|BEHOPS|RUSSOMANDO|PUERTO MITRE|TRECONT|MUCHACHOS|HAVANNA|PIZZAS|CERVEZA|BUENFUEGO|LOS ARCOS|BLINKY|PAIN QUOTIDIEN|HELADO|GELATO|GIRASOLES"],
+["Internet y suscripciones","STARLINK|CLAUDE|NETFLIX|ALIEXPRESS|SPOTIFY|GOOGLE|APPLE"],["Salud","FARMACIA|VITAL"],
+["Indumentaria y hogar","ADIDAS|RAIDERS|SOMMIER|MTS|EASY|SHOPG|SODIMAC|PUMA|INDUMENTARIA|NO END|CEBRA|CASA PINTA|SPORTING|MAXIHOGAR|MDQLESPORTS"],
+["Auto, moto y transporte","AUTOMOTOR|MOTOS|UBER"],["Viajes","AEROLINEAS"],
+["Club y estacionamiento","CLUB|ESTACIONAMIENTO"],["Seguro vivienda (débito)","NAC SE"]].map(([k,p])=>[k,new RegExp(p,"i")]);
+function cls(r){if(r.tax)return"Cargos, impuestos e intereses";for(const[k,p]of RULES)if(p.test(r.d))return k;return"Sin clasificar"}
+function norm(d){
+  d=d.trim().replace(/^(MERPAGO\*|PAYU\*AR\*|MODOQRI\*|DLO\*|DLOCAL\*|EPAGOS \*|SIRO\*)/i,"");
+  d=d.replace(/^SUPERM\s+/i,"").replace(/\s*SUC\s*\d+/i,"").replace(/(ANÓNIMA|AN NIMA|ANONIMA)\s+\d+/i,"ANÓNIMA").replace(/\s*\(.*/,"");
+  d=d.replace(/AN[ÓO]?NIMA|AN NIMA/i,"ANÓNIMA");
+  return d.replace(/\s+/g," ").trim().toUpperCase().slice(0,28)}
+const MO={Ene:1,Feb:2,Mar:3,Abr:4,May:5,Jun:6,Jul:7,Ago:8,Sep:9,Oct:10,Nov:11,Dic:12};
+function dd(f){const[a,b,c]=f.split("-");return Date.UTC(2000+ +c,(MO[b]||+b)-1,+a)}
+const ymdMs=x=>Date.UTC(Math.floor(x/10000),Math.floor(x/100)%100-1,x%100);
+function titleCase(s){return s.replace(/\s+\$$/,"").replace(/\s+/g," ").toLowerCase().replace(/[a-záéíóúñü]+/g,w=>w[0].toUpperCase()+w.slice(1))}
+/* parsed = resultado de parseStatement; D = {conc,pay}; devuelve {st,dup,adj} */
+function buildStatement(parsed,D){
+  const C=D.conc,rowsIn=parsed.rows.slice();
+  const s=r2(rowsIn.reduce((a,r)=>a+r.p,0));
+  if(parsed.k==="MC"&&Math.abs(s-parsed.total)>0.01)rowsIn.push({f:parsed.cierre,d:"SALDO A FAVOR ANTERIOR",q:null,p:r2(parsed.total-s),u:0,tax:true,card:"-"});
+  const mcidx=C.findIndex(c=>c.n==="Mastercard");
+  const agg=new Map(),dup=[],adj=[];
+  for(const r of rowsIn){
+    const tit=r.tax?"—":(r.card==="9445"?"Luisa":"Matías");
+    const rub=cls(r),me=r.tax?titleCase(r.d).slice(0,28):norm(r.d);let isdup=false;
+    if(!r.tax&&r.p>=1000){let d0=null;try{d0=dd(r.f)}catch(e){}
+      if(d0&&!isNaN(d0))for(const p of D.pay){const c=C[p[1]];
+        if(c.cat!=="Tarjetas"&&c.mon==="Pesos"&&Math.abs(p[2]-r.p)<0.015&&Math.abs((ymdMs(p[0])-d0)/864e5)<=7){
+          isdup=true;dup.push([parsed.cierre,parsed.k,me,r.p,c.n,p[0]]);
+          if(parsed.k==="MC"){const t=new Date(Date.parse(parsed.cierre+"T00:00:00Z")+8*864e5);adj.push([t.getUTCFullYear()*10000+(t.getUTCMonth()+1)*100+t.getUTCDate(),mcidx,r.p,parsed.cierre+"|MC"])}
+          break}}}
+    const key=tit+"\u0001"+(isdup?"DUP":rub)+"\u0001"+me;let a=agg.get(key);if(!a){a={t:tit,r:isdup?"DUP":rub,m:me,p:0,u:0,n:0};agg.set(key,a)}
+    a.p+=r.p;a.u+=r.u;a.n++}
+  const st={c:parsed.cierre,k:parsed.k,tot:parsed.total,usd:parsed.usd,rows:[...agg.values()].map(a=>[a.t,a.r,a.m,r2(a.p),r2(a.u),a.n])};
+  return{st,dup,adj}}
+root.CardsLib.buildStatement=buildStatement;root.CardsLib.cls=cls;root.CardsLib.norm=norm;
+})(typeof window!=="undefined"?window:globalThis);
+
+</script>
 <script>
 const $=id=>document.getElementById(id);
 const CLIENT_ID="35082583518-7l8h2cq4duvugqis63v5sccthclgivkn.apps.googleusercontent.com";
@@ -505,7 +656,7 @@ function openPay(ci,i){
   $("p-amt").value=lp?String(lp.imp).replace(".",","):"";
   const dd=i===CUR_I?TY*10000+(TM+1)*100+TD:ymd(i,1),s=String(dd);
   $("p-date").value=s.slice(0,4)+"-"+s.slice(4,6)+"-"+s.slice(6,8);
-  updPay();openSheet("psheet");setTimeout(()=>{$("p-amt").focus();$("p-amt").select()},260);
+  $("p-cm").value="";updPay();openSheet("psheet");setTimeout(()=>{$("p-amt").focus();$("p-amt").select()},260);
 }
 function payDate(){const v=$("p-date").value;return v?+v.replace(/-/g,""):null}
 function updPay(){
@@ -521,7 +672,7 @@ $("p-amt").addEventListener("input",updPay);$("p-date").addEventListener("input"
 $("p-ok").onclick=()=>{
   const amt=parseAmt($("p-amt").value),d=payDate();if(!isFinite(amt)||!d||!pc)return;
   const c=CONC[pc.ci],i=pc.i;
-  ST.newp[i+"|"+pc.ci]={amt,d,file:compName(c,d)};save();
+  ST.newp[i+"|"+pc.ci]={amt,d,file:compName(c,d),cm:($("p-cm").value||"").trim()||undefined};save();
   closeSheets();renderMes();
   if(MAIL[c.n])setTimeout(()=>openMail(pc.ci,i),300);
 };
@@ -728,9 +879,9 @@ function renderTj(){
 function noteAn(){
   const out=[],cn=i=>CONC[i].n;
   const adj=ADJ_OK.reduce((a,x)=>a+x[2],0);
-  if(adj)out.push("Se descontaron $ "+fmtN(adj)+" del pago de Mastercard porque ya figura cargado como pago propio (Tasa higiene NQN).");
+  if(adj)out.push("Se descontaron $ "+fmtN(adj)+" del pago de Mastercard porque esos consumos ya figuran cargados como pago propio.");
   const wait=ADJ_WAIT.reduce((a,x)=>a+x[2],0);
-  if(wait)out.push("Faltan cargar en tu base los pagos de Mastercard de diciembre de 2025: cuando estén, se descontarán $ "+fmtN(wait)+" que ya figuran como pagos propios (Tasa higiene NQN y Luz/Agua Torre 8).");
+  if(wait){const ms=[...new Set(ADJ_WAIT.map(a=>MES[Mo(a[0])]+" de "+Yo(a[0])))].join(", ");out.push("Falta cargar en tu base el pago de Mastercard de "+ms+": cuando esté, se descontarán $ "+fmtN(wait)+" que ya figuran como pagos propios.")}
   CARDS.miss.forEach(m=>{const ci=CONC.findIndex(c=>c.n===(m[0]==="VISA"?"VISA":"Mastercard"));const lo=m[1]-6,hi=m[1]+6;
     const near=byC[ci].filter(p=>p.d>=lo-70&&p.d<=hi+70&&Math.abs(Do(p.d)-Do(m[1]))<=6&&mi(p.d)===mi(m[1]));
     if(near.some(p=>Math.abs(p.imp-m[2])<1))return;
@@ -820,7 +971,7 @@ $("r-save").onclick=async()=>{await _rs();if(/^✓/.test($("r-hint").textContent
 
 /* ---- diagnóstico y rescate del comprobante compartido ---- */
 (function(){
-  const vtag=document.createElement("div");vtag.textContent="versión 11";vtag.style.cssText="text-align:center;opacity:.5;font-size:11px;margin:18px 0 6px";document.body.appendChild(vtag);
+  const vtag=document.createElement("div");vtag.textContent="versión 12";vtag.style.cssText="text-align:center;opacity:.5;font-size:11px;margin:18px 0 6px";document.body.appendChild(vtag);
   function msg(t,ok){let b=document.getElementById("rmsg");if(!b){b=document.createElement("div");b.id="rmsg";b.onclick=()=>b.remove();document.body.appendChild(b)}
     b.textContent=t+" (tocá para cerrar)";b.style.cssText="position:fixed;left:8px;right:8px;top:calc(env(safe-area-inset-top,0px) + 8px);z-index:100;padding:12px;border-radius:12px;font-size:13px;color:#fff;background:"+(ok?"#143d30":"#4a1d1d")+";border:1px solid "+(ok?"#6fbf9f":"#e08080")}
   const viaUrl=/[?&]shared=1/.test(location.search);
@@ -857,6 +1008,63 @@ $("r-save").onclick=async()=>{await _rs();if(/^✓/.test($("r-hint").textContent
       setTimeout(()=>{closeSheets();const t=document.createElement("div");t.textContent=txt;
         t.style.cssText="position:fixed;left:8px;right:8px;top:calc(env(safe-area-inset-top,0px) + 8px);z-index:100;padding:12px;border-radius:12px;font-size:14px;color:#fff;background:#143d30;border:1px solid #6fbf9f";
         document.body.appendChild(t);setTimeout(()=>t.remove(),3500);if(sel&&!sel.isPaid)setTimeout(()=>openPay(sel.ci,vm),350)},900)}};
+})();
+
+/* ============ Cargar resumen de tarjeta (PDF) ============ */
+(function(){
+  const BASEU="https://sheets.googleapis.com/v4/spreadsheets/";
+  const PDFB="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/";
+  let pdfReady=null;
+  function loadPdfJs(){if(window.pdfjsLib)return Promise.resolve();if(pdfReady)return pdfReady;
+    pdfReady=new Promise((res,rej)=>{const s=document.createElement("script");s.src=PDFB+"pdf.min.js";
+      s.onload=()=>{try{pdfjsLib.GlobalWorkerOptions.workerSrc=PDFB+"pdf.worker.min.js";res()}catch(e){rej(e)}};
+      s.onerror=()=>{pdfReady=null;rej(new Error("No pude cargar el lector de PDF. Revisá tu conexión."))};document.head.appendChild(s)});return pdfReady}
+  async function saveCards(cards){const id=await findBase();if(!id)throw new Error("No encuentro tu base en Google.");
+    await gapi(BASEU+id+"/values/Config!A:B:clear",{method:"POST",headers:JH,body:"{}"});
+    const rows=[["clave","valor"]].concat(chunk(JSON.stringify(cards),40000).map((x,i)=>["tarjetas_"+i,x]));
+    await gapi(BASEU+id+"/values/Config!A1?valueInputOption=RAW",{method:"PUT",headers:JH,body:JSON.stringify({values:rows})})}
+  function quitar(c,k){
+    const old=CARDS.dup.filter(d=>d[0]===c&&d[1]===k);
+    CARDS.st=CARDS.st.filter(s=>!(s.c===c&&s.k===k));CARDS.dup=CARDS.dup.filter(d=>!(d[0]===c&&d[1]===k));
+    if(k==="MC"){const tag=c+"|MC";const amts=old.map(d=>d[3]);
+      CARDS.adj=CARDS.adj.filter(a=>{if(a[3]===tag)return false;if(a[3]===undefined){const j=amts.findIndex(x=>Math.abs(x-a[2])<0.015);if(j>=0){amts.splice(j,1);return false}}return true})}}
+  const wrap=document.createElement("div");wrap.style.cssText="margin:0 0 12px";
+  wrap.innerHTML='<button type="button" class="btn" id="b-card" style="width:100%">📄 Cargar resumen de tarjeta (PDF)</button><input type="file" id="f-card" accept="application/pdf,.pdf" multiple hidden><div class="hint" id="card-msg" style="margin-top:8px;white-space:pre-line"></div>';
+  const v=document.getElementById("v-tj");v.insertBefore(wrap,v.firstChild);
+  const msg=t=>{document.getElementById("card-msg").textContent=t};
+  document.getElementById("b-card").onclick=()=>document.getElementById("f-card").click();
+  document.getElementById("f-card").onchange=async e=>{
+    const files=[...e.target.files];e.target.value="";if(!files.length)return;
+    const log=[];let ok=0;
+    try{
+      msg("Conectando con Google…");await ensureToken();
+      msg("Preparando el lector de PDF…");await loadPdfJs();
+      for(const f of files){
+        msg("Leyendo "+f.name+"…\n"+log.join("\n"));
+        try{
+          const buf=await f.arrayBuffer();
+          const pdf=await pdfjsLib.getDocument({data:new Uint8Array(buf.slice(0))}).promise;
+          const text=await pdfText(pdf);
+          const p=CardsLib.parseStatement(text);
+          const sum=CardsLib.r2(p.rows.reduce((a,r)=>a+r.p,0));
+          const b=CardsLib.buildStatement(p,DATA);
+          const exist=CARDS.st.some(s=>s.c===p.cierre&&s.k===p.k);
+          quitar(p.cierre,p.k);
+          CARDS.st.push(b.st);CARDS.dup.push(...b.dup);CARDS.adj.push(...b.adj);
+          CARDS.st.sort((x,y)=>x.c<y.c?-1:x.c>y.c?1:x.k<y.k?-1:1);
+          const y=p.cierre.slice(0,4),mm=p.cierre.slice(5,7),nm=y+"."+mm+" - "+(p.k==="VISA"?"VISA":"Mastercard")+".pdf";
+          msg("Guardando "+nm+" en tu Drive…\n"+log.join("\n"));
+          await uploadReceipt(new File([buf],nm,{type:"application/pdf"}),"Tarjetas",y);
+          const dif=Math.abs(sum-p.total)>1&&p.k==="VISA";
+          const sc=b.st.rows.filter(r=>r[1]==="Sin clasificar").reduce((a,r)=>a+r[3],0);
+          log.push("✓ "+(p.k==="VISA"?"VISA":"Mastercard")+" cierre "+p.cierre.slice(8)+"/"+mm+"/"+y+" · total $ "+fmtN(p.total)+" · "+b.st.rows.reduce((a,r)=>a+r[5],0)+" renglones"+(exist?" (reemplazó el anterior)":"")+(b.dup.length?" · "+b.dup.length+" ya cargado(s) como pago propio":"")+(dif?"\n  ⚠ La suma de los consumos no coincide con el total del resumen: revisalo.":"")+(sc>0?"\n  Sin clasificar: $ "+fmtN(sc):""));ok++;
+        }catch(err){log.push("✗ "+f.name+": "+err.message)}
+      }
+      if(ok){msg("Guardando en tu hoja de Google…\n"+log.join("\n"));await saveCards(CARDS);cacheData(DATA,CARDS)}
+      msg(log.join("\n")+(ok?"\n\n✓ Listo. Actualizando la pantalla…":""));
+      if(ok)setTimeout(()=>location.reload(),2500)
+    }catch(err){msg("✗ "+err.message+(log.length?"\n"+log.join("\n"):""))}
+  };
 })();
 
 renderMes();
