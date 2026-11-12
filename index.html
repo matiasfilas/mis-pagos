@@ -971,7 +971,7 @@ $("r-save").onclick=async()=>{await _rs();if(/^✓/.test($("r-hint").textContent
 
 /* ---- diagnóstico y rescate del comprobante compartido ---- */
 (function(){
-  const vtag=document.createElement("div");vtag.textContent="versión 12";vtag.style.cssText="text-align:center;opacity:.5;font-size:11px;margin:18px 0 6px";document.body.appendChild(vtag);
+  const vtag=document.createElement("div");vtag.textContent="versión 13";vtag.style.cssText="text-align:center;opacity:.5;font-size:11px;margin:18px 0 6px";document.body.appendChild(vtag);
   function msg(t,ok){let b=document.getElementById("rmsg");if(!b){b=document.createElement("div");b.id="rmsg";b.onclick=()=>b.remove();document.body.appendChild(b)}
     b.textContent=t+" (tocá para cerrar)";b.style.cssText="position:fixed;left:8px;right:8px;top:calc(env(safe-area-inset-top,0px) + 8px);z-index:100;padding:12px;border-radius:12px;font-size:13px;color:#fff;background:"+(ok?"#143d30":"#4a1d1d")+";border:1px solid "+(ok?"#6fbf9f":"#e08080")}
   const viaUrl=/[?&]shared=1/.test(location.search);
@@ -988,14 +988,15 @@ $("r-save").onclick=async()=>{await _rs();if(/^✓/.test($("r-hint").textContent
   }catch(e){msg("Error al leer el comprobante compartido: "+e.message)}},900);
 })();
 
-/* ---- botón para elegir el comprobante a mano (no depende de "Compartir") ---- */
+/* ---- botón flotante para elegir el comprobante (siempre a mano, en todas las solapas) ---- */
 (function(){
-  const b=document.createElement("button");b.type="button";b.className="btn";b.id="b-pick";b.textContent="📎 Subir comprobante";
-  b.style.cssText="margin-top:8px;width:100%";
+  const b=document.createElement("button");b.type="button";b.className="btn primary";b.id="b-pick";b.textContent="📎 Comprobante";
+  b.style.cssText="position:fixed;right:max(16px,env(safe-area-inset-right,0px));bottom:calc(env(safe-area-inset-bottom,0px) + 84px);z-index:29;width:auto;padding:12px 18px;border-radius:999px;box-shadow:0 4px 14px rgba(0,0,0,.35)";
   const inp=document.createElement("input");inp.type="file";inp.accept="application/pdf,image/*,.pdf";inp.hidden=true;document.body.appendChild(inp);
   b.onclick=()=>inp.click();
   inp.onchange=()=>{const f=inp.files[0];inp.value="";if(!f)return;SH={blob:f,name:f.name||"comprobante.pdf"};openReceipt()};
-  const row=document.getElementById("b-data").parentNode;row.parentNode.insertBefore(b,row);
+  const t=document.querySelector(".tabs");t.parentNode.insertBefore(b,t.nextSibling);
+  const st=document.createElement("style");st.textContent=".tabs[hidden] ~ #b-pick{display:none}";document.head.appendChild(st);
 })();
 
 /* ---- al guardar bien: cerrar la pantalla, avisar y olvidar el archivo ---- */
@@ -1032,12 +1033,13 @@ $("r-save").onclick=async()=>{await _rs();if(/^✓/.test($("r-hint").textContent
   wrap.innerHTML='<button type="button" class="btn" id="b-card" style="width:100%">📄 Cargar resumen de tarjeta (PDF)</button><input type="file" id="f-card" accept="application/pdf,.pdf" multiple hidden><div class="hint" id="card-msg" style="margin-top:8px;white-space:pre-line"></div>';
   const v=document.getElementById("v-tj");v.insertBefore(wrap,v.firstChild);
   const msg=t=>{document.getElementById("card-msg").textContent=t};
-  document.getElementById("b-card").onclick=()=>document.getElementById("f-card").click();
+  document.getElementById("b-card").onclick=async()=>{
+    if(!tokenOk()){msg("Conectando con Google…");try{await ensureToken();msg("✓ Conectado. Tocá de nuevo el botón para elegir el PDF.")}catch(err){msg("✗ "+err.message)}return}
+    document.getElementById("f-card").click()};
   document.getElementById("f-card").onchange=async e=>{
     const files=[...e.target.files];e.target.value="";if(!files.length)return;
     const log=[];let ok=0;
     try{
-      msg("Conectando con Google…");await ensureToken();
       msg("Preparando el lector de PDF…");await loadPdfJs();
       for(const f of files){
         msg("Leyendo "+f.name+"…\n"+log.join("\n"));
