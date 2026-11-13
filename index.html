@@ -554,7 +554,7 @@ function showLoader(canCancel){["v-mes","v-an","v-tj"].forEach(x=>$(x).hidden=tr
 if("serviceWorker" in navigator)navigator.serviceWorker.register("sw.js").catch(()=>{});
 function main(){
 
-const CONC=DATA.conc,RATES=DATA.rates;
+const CONC=DATA.conc,RATES=DATA.rates;try{(JSON.parse(localStorage.getItem("mispagos-v2")||"{}").newc||[]).forEach(c=>{if(!CONC.some(x=>x.n===c.n))CONC.push(c)})}catch(e){}
 const MES=["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
 const M3=["ene","feb","mar","abr","may","jun","jul","ago","sep","oct","nov","dic"];
 const Y0=2016;
@@ -956,6 +956,8 @@ let syncing=false;
 async function syncNow(){if(syncing)return;syncing=true;
   try{setSync("Conectando con Google…");await ensureToken();
     const L=newList();
+    if((ST.newc||[]).length){setSync("Enviando conceptos nuevos…");const id0=await findBase();
+      await gapi("https://sheets.googleapis.com/v4/spreadsheets/"+id0+"/values/Conceptos!A:I:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS",{method:"POST",headers:JH,body:JSON.stringify({values:ST.newc.map(c=>[c.n,c.cat,c.code,c.rez,c.inm||"",c.mon,c.day==null?"":c.day,c.desde||"",c.hasta||""])})});ST.newc=[];save()}
     if(L.length){setSync("Enviando "+L.length+(L.length===1?" pago…":" pagos…"));
       await appendPayments(L.map(x=>[ymdIso(x.d),CONC[x.ci].n,x.amt,CONC[x.ci].mon,CONC[x.ci].mon==="USD"?x.amt:Math.round(x.amt/rateAt(x.d)*100)/100,x.cm||""]));
       const d=JSON.parse(JSON.stringify(DATA));L.forEach(x=>d.pay.push([x.d,x.ci,x.amt,CONC[x.ci].mon==="USD"?x.amt:Math.round(x.amt/rateAt(x.d)*100)/100,x.cm||null]));d.pay.sort((a,b)=>a[0]-b[0]);
@@ -993,7 +995,7 @@ $("r-save").onclick=async()=>{await _rs();if(/^✓/.test($("r-hint").textContent
 
 /* ---- diagnóstico y rescate del comprobante compartido ---- */
 (function(){
-  const vtag=document.createElement("div");vtag.textContent="versión 18";vtag.style.cssText="text-align:center;opacity:.5;font-size:11px;margin:18px 0 6px";document.body.appendChild(vtag);
+  const vtag=document.createElement("div");vtag.textContent="versión 19";vtag.style.cssText="text-align:center;opacity:.5;font-size:11px;margin:18px 0 6px";document.body.appendChild(vtag);
   function msg(t,ok){let b=document.getElementById("rmsg");if(!b){b=document.createElement("div");b.id="rmsg";b.onclick=()=>b.remove();document.body.appendChild(b)}
     b.textContent=t+" (tocá para cerrar)";b.style.cssText="position:fixed;left:8px;right:8px;top:calc(env(safe-area-inset-top,0px) + 8px);z-index:100;padding:12px;border-radius:12px;font-size:13px;color:#fff;background:"+(ok?"#143d30":"#4a1d1d")+";border:1px solid "+(ok?"#6fbf9f":"#e08080")}
   const viaUrl=/[?&]shared=1/.test(location.search);
@@ -1159,6 +1161,58 @@ async function fileLink(name,el){
       fs.forEach(f=>{const a=document.createElement("a");a.href=f.webViewLink;a.target="_blank";a.rel="noopener";a.textContent=f.name;a.style.cssText="display:block;margin-top:8px;color:#fff;text-decoration:underline;word-break:break-all";box.appendChild(a)})}
   }catch(err){box.textContent="✗ "+err.message}
 }
+
+
+/* ============ Buscador del mes + Pago extra ============ */
+(function(){
+  const bar=document.createElement("div");bar.style.cssText="display:flex;gap:8px;margin:0 0 12px;align-items:center";
+  bar.innerHTML='<input id="q" type="search" placeholder="Buscar concepto…" autocomplete="off" style="flex:1;min-width:0;padding:11px 12px;border-radius:12px;border:1px solid var(--line);background:var(--surface);color:inherit;font:inherit"><button type="button" class="btn" id="b-extra" style="white-space:nowrap">+ Pago extra</button>';
+  const lists=$("lists");lists.parentNode.insertBefore(bar,lists);
+  const nz=t=>String(t||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase();
+  function applyQ(){const q=nz($("q").value.trim());
+    document.querySelectorAll("#lists li.item").forEach(li=>{li.hidden=!!q&&!nz(li.textContent).includes(q)});
+    document.querySelectorAll("#lists ul").forEach(ul=>{const any=[...ul.children].some(li=>!li.hidden);ul.hidden=!any;if(ul.previousElementSibling&&ul.previousElementSibling.classList.contains("sec"))ul.previousElementSibling.hidden=!any});
+    let e=document.getElementById("q-empty");const none=q&&![...document.querySelectorAll("#lists li.item")].some(li=>!li.hidden);
+    if(none){if(!e){e=document.createElement("div");e.id="q-empty";e.className="hint";e.style.margin="8px 2px";lists.appendChild(e)}e.textContent="Ningún concepto coincide con «"+$("q").value.trim()+"». Podés registrarlo con + Pago extra."}else if(e)e.remove()}
+  $("q").addEventListener("input",applyQ);
+  const _rm=renderMes;renderMes=function(){_rm();applyQ()};
+  // ---- Pago extra ----
+  const box=document.createElement("div");box.hidden=true;
+  box.style.cssText="position:fixed;left:0;right:0;bottom:0;z-index:45;max-height:90vh;overflow:auto;background:var(--surface);color:inherit;border-top:1px solid var(--line);border-radius:18px 18px 0 0;padding:16px max(16px,env(safe-area-inset-left,0px)) calc(env(safe-area-inset-bottom,0px) + 16px);box-shadow:0 -8px 30px rgba(0,0,0,.4)";
+  document.body.appendChild(box);
+  const inS="width:100%;box-sizing:border-box;padding:11px 12px;border-radius:12px;border:1px solid var(--line);background:var(--bg,transparent);color:inherit;font:inherit;margin-top:4px";
+  const cats=[...new Set(CONC.map(c=>c.cat))].sort((a,b)=>a.localeCompare(b,"es"));
+  const todayIso=()=>{const n=TY*10000+(TM+1)*100+TD,s=String(n);return s.slice(0,4)+"-"+s.slice(4,6)+"-"+s.slice(6,8)};
+  $("b-extra").onclick=()=>{
+    box.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><b>Pago extra</b><button type="button" class="xs" id="x-x" aria-label="Cerrar">✕</button></div>'
+     +'<div class="hint" style="margin-bottom:10px">Para un pago que no está en tu lista habitual, por ejemplo la compra de un vehículo. Queda registrado en tu hoja y entra en el análisis.</div>'
+     +'<label class="lab">Concepto<input id="x-n" type="text" list="x-nl" autocomplete="off" placeholder="Ej.: Compra Peugeot 208" style="'+inS+'"><datalist id="x-nl">'+CONC.map(c=>'<option value="'+c.n.replace(/"/g,"&quot;")+'">').join("")+'</datalist></label>'
+     +'<label class="lab" style="display:block;margin-top:10px">Categoría<select id="x-c" style="'+inS+'">'+cats.map(c=>'<option>'+c+'</option>').join("")+'<option value="__new">Otra (escribirla)…</option></select></label>'
+     +'<input id="x-cn" type="text" placeholder="Nombre de la categoría nueva" hidden style="'+inS+'">'
+     +'<div style="display:flex;gap:8px;margin-top:10px"><label class="lab" style="flex:2;min-width:0">Importe<input id="x-a" type="text" inputmode="decimal" placeholder="0,00" style="'+inS+'"></label><label class="lab" style="flex:1;min-width:0">Moneda<select id="x-m" style="'+inS+'"><option>Pesos</option><option>USD</option></select></label></div>'
+     +'<label class="lab" style="display:block;margin-top:10px">Fecha<input id="x-d" type="date" value="'+todayIso()+'" style="'+inS+'"></label>'
+     +'<label class="lab" style="display:block;margin-top:10px">Comentario (opcional)<input id="x-cm" type="text" maxlength="200" style="'+inS+'"></label>'
+     +'<div class="hint" id="x-err" style="margin-top:8px;color:var(--warn)"></div>'
+     +'<button type="button" class="btn primary" id="x-ok" style="width:100%;margin-top:10px">Guardar pago</button>';
+    box.hidden=false;
+    box.querySelector("#x-x").onclick=()=>box.hidden=true;
+    const sel=box.querySelector("#x-c"),cn=box.querySelector("#x-cn"),nn=box.querySelector("#x-n");
+    sel.onchange=()=>{cn.hidden=sel.value!=="__new"};
+    nn.oninput=()=>{const c=CONC.find(x=>x.n.toLowerCase()===nn.value.trim().toLowerCase());if(c){sel.value=c.cat;cn.hidden=true;box.querySelector("#x-m").value=c.mon;sel.disabled=true;box.querySelector("#x-m").disabled=true}else{sel.disabled=false;box.querySelector("#x-m").disabled=false}};
+    box.querySelector("#x-ok").onclick=()=>{
+      const err=t=>box.querySelector("#x-err").textContent=t;
+      const name=nn.value.trim(),amt=parseAmt(box.querySelector("#x-a").value),dv=box.querySelector("#x-d").value,d=dv?+dv.replace(/-/g,""):null;
+      let cat=sel.value==="__new"?cn.value.trim():sel.value;const mon=box.querySelector("#x-m").value,cm=box.querySelector("#x-cm").value.trim();
+      if(!name)return err("Escribí el concepto.");if(!cat)return err("Elegí o escribí la categoría.");if(!isFinite(amt)||amt<=0)return err("Escribí un importe válido.");if(!d)return err("Elegí la fecha.");
+      let ci=CONC.findIndex(c=>c.n.toLowerCase()===name.toLowerCase()),isNew=false;
+      if(ci<0){ci=CONC.length;isNew=true;ST.newc=(ST.newc||[]).concat([{n:name,cat,code:" - "+name,rez:0,inm:"",mon,day:null,desde:d,hasta:d}])}
+      const i=mi(d);ST.newp[i+"|"+ci+(isNew?"":"|x"+Date.now())]={amt,d,file:null,cm:cm||undefined};
+      if(isNew){const c=ST.newc[ST.newc.length-1];ST.newp[i+"|"+ci].file=compName(c,d)}
+      save();box.hidden=true;
+      if(isNew){location.reload();return}
+      vm=Math.min(i,CUR_I);renderMes();if(tokenOk())syncNow()};
+  };
+})();
 
 renderMes();
 
