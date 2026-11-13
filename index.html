@@ -275,7 +275,7 @@ label.f{display:grid;font-size:12.5px;color:var(--muted);font-weight:500}
 <div class="sheet" id="csheet" role="dialog" aria-modal="true" aria-labelledby="c-t" aria-hidden="true"><div class="sheet-in">
   <div class="sh-top"><div><h3 id="c-t"></h3><div class="hint" id="c-sub"></div></div><button type="button" class="xs" data-close aria-label="Cerrar">✕</button></div>
   <div id="c-sum"></div><div id="c-list"></div>
-  <div class="hint" id="c-hint" hidden>Prototipo: en la versión real este botón abre el comprobante guardado en tu OneDrive.</div>
+  <div class="hint" id="c-hint" hidden></div>
 </div></div>
 
 <script src="vendor/xlsx.full.min.js"></script>
@@ -509,9 +509,12 @@ async function ensureSub(parent,name){let m={};try{m=JSON.parse(lsGet("mp-sub")|
   const r=await gapi(DR+"?q="+q+"&fields=files(id)&pageSize=1");let id=r.files&&r.files[0]?r.files[0].id:null;
   if(!id){const f=await gapi(DR+"?fields=id",{method:"POST",headers:JH,body:JSON.stringify({name,mimeType:"application/vnd.google-apps.folder",parents:[parent]})});id=f.id}
   m[k]=id;lsSet("mp-sub",JSON.stringify(m));return id}
+async function uniqName(folder,name){const m=name.match(/^(.*?)(\.[A-Za-z0-9]+)?$/),base=m[1],ext=m[2]||"";let n=name,k=1;
+  for(;;){const q=encodeURIComponent("name='"+n.replace(/'/g,"\\'")+"' and '"+folder+"' in parents and trashed=false");
+    const r=await gapi(DR+"?q="+q+"&fields=files(id)&pageSize=1");if(!r.files||!r.files.length)return n;k++;n=base+" ("+k+")"+ext}}
 async function uploadReceipt(file,cat,year){let folder=await ensureFolder();
   if(cat)folder=await ensureSub(folder,cat);if(year)folder=await ensureSub(folder,String(year));
-  const fd=new FormData();fd.append("metadata",new Blob([JSON.stringify({name:file.name,parents:[folder]})],{type:"application/json"}));fd.append("file",file);
+  const nm=await uniqName(folder,file.name);const fd=new FormData();fd.append("metadata",new Blob([JSON.stringify({name:nm,parents:[folder]})],{type:"application/json"}));fd.append("file",file);
   return gapi("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink",{method:"POST",body:fd})}
 const TRANS_NAME="Transitorio";
 async function listTransit(){const q=encodeURIComponent("name='"+TRANS_NAME+"' and mimeType='application/vnd.google-apps.folder' and trashed=false");
@@ -520,7 +523,13 @@ async function listTransit(){const q=encodeURIComponent("name='"+TRANS_NAME+"' a
     const x=await gapi(DR+"?q="+q2+"&fields=files(id,name,mimeType,createdTime,size)&orderBy=createdTime desc&pageSize=50");(x.files||[]).forEach(y=>out.push({...y,parent:f.id}))}
   return out}
 async function moveReceipt(sh,name,cat,year){let folder=await ensureFolder();if(cat)folder=await ensureSub(folder,cat);if(year)folder=await ensureSub(folder,String(year));
-  return gapi(DR+"/"+sh.driveId+"?addParents="+folder+"&removeParents="+sh.parent+"&fields=id,name",{method:"PATCH",headers:JH,body:JSON.stringify({name})})}
+  const nm=await uniqName(folder,name);
+  await gapi(DR+"/"+sh.driveId+"?fields=id,name",{method:"PATCH",headers:JH,body:JSON.stringify({name:nm})});
+  await gapi(DR+"/"+sh.driveId+"?addParents="+folder+"&removeParents="+sh.parent+"&fields=id,name",{method:"PATCH",headers:JH,body:"{}"});
+  const f=await gapi(DR+"/"+sh.driveId+"?fields=id,name,parents");
+  if(f.name!==nm)throw new Error("Drive movió el archivo pero no lo renombró (quedó como «"+f.name+"»). Probá renombrarlo a mano a «"+nm+"».");
+  if(!(f.parents||[]).includes(folder))throw new Error("Drive no lo movió a la carpeta de destino. Revisá la carpeta Transitorio.");
+  return f}
 async function downloadDrive(id){await ensureToken();const r=await fetch(DR+"/"+id+"?alt=media",{headers:{Authorization:"Bearer "+TOKEN}});if(!r.ok)throw new Error("No pude bajar el archivo ("+r.status+")");return r.blob()}
 /* ---------- pagos nuevos hacia la hoja ---------- */
 async function appendPayments(rows){const id=await findBase();if(!id)throw new Error("No encuentro tu base en Google.");
@@ -608,11 +617,10 @@ let vm=Math.min(CUR_I,M-1>CUR_I?M-1:CUR_I);
 function monthRows(i){
   const rows=[];
   CONC.forEach((c,ci)=>{
-    const db=byC[ci].filter(p=>mi(p.d)===i), np=ST.newp[i+"|"+ci];
+    const db=byC[ci].filter(p=>mi(p.d)===i), kk=Object.keys(ST.newp).filter(k=>k===i+"|"+ci||k.startsWith(i+"|"+ci+"|")), nps=kk.map(k=>ST.newp[k]), np=nps[0];
     if(!active(c,i)&&!db.length&&!np)return;
     let paid=null;
-    if(np)paid={imp:np.amt,d:np.d,isNew:true,file:np.file};
-    else if(db.length)paid={imp:db.reduce((a,p)=>a+p.imp,0),d:db[db.length-1].d,isNew:false,file:compName(c,db[db.length-1].d)};
+    if(nps.length||db.length){const imp=db.reduce((a,p)=>a+p.imp,0)+nps.reduce((a,p)=>a+p.amt,0),dts=db.map(p=>p.d).concat(nps.map(p=>p.d));paid={imp,d:Math.max(...dts),isNew:!db.length,file:np?np.file:compName(c,db[db.length-1].d),extras:db.length?nps.length:Math.max(nps.length-1,0),n:db.length+nps.length}}
     rows.push({c,ci,paid,prev:lastPayBefore(ci,i)});
   });
   return rows;
@@ -641,38 +649,39 @@ function rowEl(r,i){
   const b=document.createElement("button");b.type="button";b.className="chk";
   b.setAttribute("aria-label",(done?"Desmarcar ":"Marcar pagado: ")+c.n);b.setAttribute("aria-pressed",done);
   b.innerHTML='<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10.5l4 4 8-9"/></svg>';
-  b.onclick=()=>{if(!done)openPay(r.ci,i);else if(r.paid.isNew){delete ST.newp[i+"|"+r.ci];save();renderMes()}else{b.title="Este pago viene de tu base"}};
+  b.onclick=()=>{const pre=i+"|"+r.ci,drop=()=>{Object.keys(ST.newp).filter(k=>k===pre||k.startsWith(pre+"|")).forEach(k=>delete ST.newp[k]);save();renderMes()};if(!done)openPay(r.ci,i);else if(r.paid.isNew)drop();else if(r.paid.extras){Object.keys(ST.newp).filter(k=>k.startsWith(pre+"|")).forEach(k=>delete ST.newp[k]);save();renderMes()}else{b.title="Este pago viene de tu base"}};
   const info=document.createElement("div");info.className="info";
   let meta='<span>'+c.cat+'</span>';
   if(done){const d=r.paid.d;meta+='<span>Pagado el '+String(Do(d)).padStart(2,"0")+"/"+String(Mo(d)+1).padStart(2,"0")+'</span>'}
   else meta+='<span class="due">'+(c.day?"Día habitual: "+c.day+(late?" (pasó)":""):"Sin día habitual")+'</span>';
   info.innerHTML='<div class="name"></div><div class="meta">'+meta+'</div>'+(done&&r.paid.file?'<div class="file"></div>':'');
-  info.querySelector(".name").textContent=c.n;if(done&&r.paid.file)info.querySelector(".file").textContent=r.paid.file;
+  info.querySelector(".name").textContent=c.n;if(done&&r.paid.file){const fe=info.querySelector(".file");fe.textContent=r.paid.file;fe.style.cursor="pointer";fe.style.textDecoration="underline";fe.onclick=()=>fileLink(r.paid.file,null)}
   if(done&&MAIL[c.n]){const k=i+"|"+r.ci,sent=!!ST.inf[k];const ab=document.createElement("button");ab.type="button";ab.className="avb"+(sent?"":" pend");ab.textContent=sent?"Aviso enviado":"Avisar a la administración";ab.onclick=()=>openMail(r.ci,i);info.appendChild(ab)}
   const a=document.createElement("div");a.className="amt num";
   if(done){const pv=r.prev?r.prev.imp:null;a.innerHTML=money(r.paid.imp,c.mon)+(pv?'<br>'+chipOf(r.paid.imp,pv):"")}
   else{const lp=lastPay(r.ci);a.innerHTML=lp?'~'+money(lp.imp,c.mon)+'<small>último: '+lab(mi(lp.d))+'</small>':"—"}
+  if(done){const ab2=document.createElement("button");ab2.type="button";ab2.className="avb";ab2.style.marginTop="6px";ab2.textContent="+ Pago adicional";ab2.onclick=()=>openPay(r.ci,i,true);info.appendChild(ab2);if(r.paid.n>1){const t=document.createElement("div");t.className="meta";t.style.marginTop="4px";t.textContent=r.paid.n+" pagos sumados este mes"+(r.paid.extras?" (tocá el tilde para quitar los pendientes de sincronizar)":"");info.appendChild(t)}}
   li.append(b,info,a);return li;
 }
 $("mprev").onclick=()=>{if(vm>0){vm--;renderMes()}};$("mnext").onclick=()=>{if(vm<CUR_I){vm++;renderMes()}};
 
 // registrar pago
 let pc=null;
-function openPay(ci,i){
-  const c=CONC[ci],lp=lastPay(ci);pc={ci,i};
-  $("p-t").textContent=c.n;$("p-sub").textContent=c.cat+(lp?" · último pago "+money(lp.imp,c.mon)+" ("+lab(mi(lp.d))+")":"");
+function openPay(ci,i,extra){
+  const c=CONC[ci],lp=lastPay(ci);pc={ci,i,extra:!!extra};
+  $("p-t").textContent=c.n+(extra?" · pago adicional":"");$("p-sub").textContent=c.cat+(lp?" · último pago "+money(lp.imp,c.mon)+" ("+lab(mi(lp.d))+")":"");
   $("p-amt-l").textContent=c.mon==="USD"?"Monto pagado (USD)":"Monto pagado";
-  $("p-amt").value=lp?String(lp.imp).replace(".",","):"";
+  $("p-amt").value=(lp&&!extra)?String(lp.imp).replace(".",","):"";
   const dd=i===CUR_I?TY*10000+(TM+1)*100+TD:ymd(i,1),s=String(dd);
   $("p-date").value=s.slice(0,4)+"-"+s.slice(4,6)+"-"+s.slice(6,8);
-  $("p-cm").value="";updPay();openSheet("psheet");setTimeout(()=>{$("p-amt").focus();$("p-amt").select()},260);
+  $("p-cm").value=extra?"Pago adicional (saldo)":"";updPay();openSheet("psheet");setTimeout(()=>{$("p-amt").focus();$("p-amt").select()},260);
 }
 function payDate(){const v=$("p-date").value;return v?+v.replace(/-/g,""):null}
 function updPay(){
   if(!pc)return;const c=CONC[pc.ci],lp=lastPay(pc.ci),amt=parseAmt($("p-amt").value),el=$("p-var");
   let t="Escribí el monto para ver la variación.",k="";
   if(isFinite(amt)&&lp){const p=(amt-lp.imp)/lp.imp*100;if(Math.abs(p)<0.05)t="Igual que "+lab(mi(lp.d))+" ("+money(lp.imp,c.mon)+")";else{k=p>0?" up":" down";t=(p>0?"▲ ":"▼ ")+pct(p)+" vs "+lab(mi(lp.d))+" · "+(p>0?"+":"−")+money(Math.abs(amt-lp.imp),c.mon)}}
-  el.className="var"+k;el.textContent=t;
+  if(pc.extra){t="Pago adicional: se suma a lo ya pagado este mes.";k=""}el.className="var"+k;el.textContent=t;
   const d=payDate(),n=d?compName(c,d):"";
   $("p-name").textContent=n?n+".pdf":"Este concepto no lleva comprobante.";
   $("p-ok").disabled=!isFinite(amt)||amt<=0||!d;
@@ -681,7 +690,7 @@ $("p-amt").addEventListener("input",updPay);$("p-date").addEventListener("input"
 $("p-ok").onclick=()=>{
   const amt=parseAmt($("p-amt").value),d=payDate();if(!isFinite(amt)||!d||!pc)return;
   const c=CONC[pc.ci],i=pc.i;
-  ST.newp[i+"|"+pc.ci]={amt,d,file:compName(c,d),cm:($("p-cm").value||"").trim()||undefined};save();
+  ST.newp[i+"|"+pc.ci+(pc.extra?"|x"+Date.now():"")]={amt,d,file:compName(c,d),cm:($("p-cm").value||"").trim()||undefined};save();
   closeSheets();renderMes();
   if(MAIL[c.n])setTimeout(()=>openMail(pc.ci,i),300);
 };
@@ -822,8 +831,8 @@ function openConc(ci,W){
   $("c-list").innerHTML=ps.length?ps.map(p=>{const dd=Do(p.d),fn=compName(c,p.d);
     return '<div class="pay"><div class="pt"><span class="num" style="font-size:13px;color:var(--muted)">'+String(dd).padStart(2,"0")+"/"+String(Mo(p.d)+1).padStart(2,"0")+"/"+Yo(p.d)+'</span><span class="num">'+money(p.imp,c.mon)+'</span></div>'+
     '<div class="pc num">≈ '+(curr==="usd"?"US$ "+fmtN(p.usd):"$ "+fmtN(p.pes))+(c.mon==="USD"?"":"")+'</div>'+(p.cm?'<div class="pc">'+String(p.cm).replace(/</g,"&lt;")+'</div>':"")+
-    (fn?'<button type="button" class="cmp" data-f="1">Comprobante: '+fn+'</button>':'<span class="cmp none">Sin comprobante para este concepto</span>')+'</div>'}).join(""):'<div class="pay"><span class="pc">Sin pagos en este período</span></div>';
-  $("c-hint").hidden=true;document.querySelectorAll("#c-list .cmp[data-f]").forEach(b=>b.onclick=()=>{$("c-hint").hidden=false});
+    (fn?'<button type="button" class="cmp" data-f="'+encodeURIComponent(fn)+'">Comprobante: '+fn+'</button>':'<span class="cmp none">Sin comprobante para este concepto</span>')+'</div>'}).join(""):'<div class="pay"><span class="pc">Sin pagos en este período</span></div>';
+  $("c-hint").hidden=true;document.querySelectorAll("#c-list .cmp[data-f]").forEach(b=>b.onclick=()=>fileLink(decodeURIComponent(b.dataset.f),$("c-hint")));
   openSheet("csheet");
 }
 
@@ -951,6 +960,7 @@ async function syncNow(){if(syncing)return;syncing=true;
       await appendPayments(L.map(x=>[ymdIso(x.d),CONC[x.ci].n,x.amt,CONC[x.ci].mon,CONC[x.ci].mon==="USD"?x.amt:Math.round(x.amt/rateAt(x.d)*100)/100,x.cm||""]));
       const d=JSON.parse(JSON.stringify(DATA));L.forEach(x=>d.pay.push([x.d,x.ci,x.amt,CONC[x.ci].mon==="USD"?x.amt:Math.round(x.amt/rateAt(x.d)*100)/100,x.cm||null]));d.pay.sort((a,b)=>a[0]-b[0]);
       ST.newp={};save();cacheData(d,CARDS)}
+    setSync("Actualizando dólar…");try{await updateRatesSheet()}catch(e){}
     setSync("Actualizando datos…");const id=await findBase();const r=await loadBase(id);cacheData(r.data,r.cards);
     setSync("✓ Sincronizado");setTimeout(()=>location.reload(),500)
   }catch(e){setSync("✗ "+e.message,true);syncing=false}}
@@ -983,7 +993,7 @@ $("r-save").onclick=async()=>{await _rs();if(/^✓/.test($("r-hint").textContent
 
 /* ---- diagnóstico y rescate del comprobante compartido ---- */
 (function(){
-  const vtag=document.createElement("div");vtag.textContent="versión 15";vtag.style.cssText="text-align:center;opacity:.5;font-size:11px;margin:18px 0 6px";document.body.appendChild(vtag);
+  const vtag=document.createElement("div");vtag.textContent="versión 18";vtag.style.cssText="text-align:center;opacity:.5;font-size:11px;margin:18px 0 6px";document.body.appendChild(vtag);
   function msg(t,ok){let b=document.getElementById("rmsg");if(!b){b=document.createElement("div");b.id="rmsg";b.onclick=()=>b.remove();document.body.appendChild(b)}
     b.textContent=t+" (tocá para cerrar)";b.style.cssText="position:fixed;left:8px;right:8px;top:calc(env(safe-area-inset-top,0px) + 8px);z-index:100;padding:12px;border-radius:12px;font-size:13px;color:#fff;background:"+(ok?"#143d30":"#4a1d1d")+";border:1px solid "+(ok?"#6fbf9f":"#e08080")}
   const viaUrl=/[?&]shared=1/.test(location.search);
@@ -1109,6 +1119,46 @@ $("r-save").onclick=async()=>{await _rs();if(/^✓/.test($("r-hint").textContent
   for(const id of["r-share","r-mail"]){const prev=$(id).onclick;
     $(id).onclick=async()=>{if(SH&&SH.driveId&&!SH.blob){$("r-hint").textContent="Bajando el archivo…";try{SH.blob=await downloadDrive(SH.driveId)}catch(e){$("r-hint").textContent="✗ "+e.message;return}}return prev()}}
 })();
+
+
+/* ============ Cotización del dólar blue: se actualiza sola ============ */
+async function fetchBlue(){
+  try{const r=await fetch("https://api.bluelytics.com.ar/v2/evolution.json");if(r.ok){const j=await r.json(),m=new Map();
+    for(const x of j){if(x.source!=="Blue"||!x.value_sell||!x.value_buy)continue;m.set(+String(x.date).replace(/-/g,""),Math.round((x.value_sell+x.value_buy)/2*100)/100)}
+    if(m.size)return [...m].sort((a,b)=>a[0]-b[0])}}catch(e){}
+  try{const r=await fetch("https://dolarapi.com/v1/dolares/blue");if(r.ok){const j=await r.json();const n=TY*10000+(TM+1)*100+TD;return [[n,Math.round((j.compra+j.venta)/2*100)/100]]}}catch(e){}
+  return null}
+async function updateRatesSheet(){
+  const rows=await fetchBlue();if(!rows)return 0;const id=await findBase();if(!id)return 0;
+  const r=await gapi("https://sheets.googleapis.com/v4/spreadsheets/"+id+"/values/Cotizaciones!A2:A?valueRenderOption=UNFORMATTED_VALUE");
+  const last=Math.max(0,...((r.values||[]).map(x=>+x[0]||0)));const nw=rows.filter(x=>x[0]>last);if(!nw.length)return 0;
+  await gapi("https://sheets.googleapis.com/v4/spreadsheets/"+id+"/values/Cotizaciones!A:B:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS",{method:"POST",headers:JH,body:JSON.stringify({values:nw})});return nw.length}
+/* al abrir la app: si falta el dólar de los últimos días, se completa solo (una vez por día) */
+(function(){
+  const today=TY*10000+(TM+1)*100+TD,last=RATES[RATES.length-1][0];let flag=null;try{flag=localStorage.getItem("mp-rt-day")}catch(e){}
+  if(last>=today||String(flag)===String(today))return;
+  fetchBlue().then(rows=>{try{localStorage.setItem("mp-rt-day",String(today))}catch(e){}
+    if(!rows)return;const nw=rows.filter(x=>x[0]>last);if(!nw.length)return;
+    DATA.rates.push(...nw);cacheData(DATA,CARDS);location.reload()})
+})();
+
+
+/* ============ abrir un comprobante guardado en Drive ============ */
+async function fileLink(name,el){
+  let box=el;
+  if(!box){box=document.getElementById("flink");if(!box){box=document.createElement("div");box.id="flink";box.style.cssText="position:fixed;left:8px;right:8px;top:calc(env(safe-area-inset-top,0px) + 8px);z-index:100;padding:12px;border-radius:12px;font-size:14px;color:#fff;background:#143d30;border:1px solid #6fbf9f";box.onclick=ev=>{if(ev.target.tagName!=="A")box.remove()};document.body.appendChild(box)}}
+  box.hidden=false;box.textContent="Buscando el comprobante en tu Drive…";
+  try{
+    if(!tokenOk())await ensureToken();
+    const base=name.replace(/\.[A-Za-z0-9]+$/,"");
+    const q=encodeURIComponent("name contains '"+base.replace(/'/g,"\\'")+"' and trashed=false and mimeType!='application/vnd.google-apps.folder'");
+    const r=await gapi(DR+"?q="+q+"&fields=files(id,name,webViewLink,createdTime)&orderBy=createdTime desc&pageSize=10");
+    const fs=(r.files||[]).filter(f=>f.name.startsWith(base));
+    if(!fs.length){box.textContent="No encontré «"+name+"» en tu Drive. Si el comprobante se cargó por otro medio, puede tener otro nombre."}
+    else{box.innerHTML="";const t=document.createElement("div");t.textContent=fs.length>1?"Encontré "+fs.length+" archivos, tocá el que quieras abrir:":"Tocá para abrir:";box.appendChild(t);
+      fs.forEach(f=>{const a=document.createElement("a");a.href=f.webViewLink;a.target="_blank";a.rel="noopener";a.textContent=f.name;a.style.cssText="display:block;margin-top:8px;color:#fff;text-decoration:underline;word-break:break-all";box.appendChild(a)})}
+  }catch(err){box.textContent="✗ "+err.message}
+}
 
 renderMes();
 
