@@ -500,11 +500,12 @@ async function loadBase(id){
   return{data:{conc,pay,rates},cards}}
 function cacheData(d,c){lsSet("mp-data",JSON.stringify(d));lsSet("mp-cards",JSON.stringify(c))}
 /* ---------- Google: comprobantes en Drive ---------- */
-async function ensureFolder(){let id=lsGet("mp-folder");if(id)return id;
+async function okId(id){try{const f=await gapi(DR+"/"+id+"?fields=id,trashed");return !!f&&!f.trashed}catch(e){return false}}
+async function ensureFolder(){let id=lsGet("mp-folder");if(id&&await okId(id))return id;
   id=await findFile(FOLDER_NAME,"application/vnd.google-apps.folder");
   if(!id){const f=await gapi(DR+"?fields=id",{method:"POST",headers:JH,body:JSON.stringify({name:FOLDER_NAME,mimeType:"application/vnd.google-apps.folder"})});id=f.id}
   lsSet("mp-folder",id);return id}
-async function ensureSub(parent,name){let m={};try{m=JSON.parse(lsGet("mp-sub")||"{}")}catch(e){}const k=parent+"|"+name;if(m[k])return m[k];
+async function ensureSub(parent,name){let m={};try{m=JSON.parse(lsGet("mp-sub")||"{}")}catch(e){}const k=parent+"|"+name;if(m[k]&&await okId(m[k]))return m[k];
   const q=encodeURIComponent("name='"+name.replace(/'/g,"\\'")+"' and mimeType='application/vnd.google-apps.folder' and '"+parent+"' in parents and trashed=false");
   const r=await gapi(DR+"?q="+q+"&fields=files(id)&pageSize=1");let id=r.files&&r.files[0]?r.files[0].id:null;
   if(!id){const f=await gapi(DR+"?fields=id",{method:"POST",headers:JH,body:JSON.stringify({name,mimeType:"application/vnd.google-apps.folder",parents:[parent]})});id=f.id}
@@ -982,10 +983,14 @@ document.querySelectorAll('input[name="rsel"]').forEach(()=>{});
 /* ---- comprobante compartido: se puede asignar a cualquier concepto del mes (pagado o pendiente) ---- */
 function openReceipt(){
   const todayN=TY*10000+(TM+1)*100+TD;
-  const rows=monthRows(vm).filter(r=>r.c.code&&r.c.code.trim()).map(r=>{const nm=r.paid&&r.paid.file?r.paid.file:compName(r.c,todayN);return Object.assign({},r,{paid:{file:nm,d:r.paid?r.paid.d:todayN},isPaid:!!r.paid})});
+  const rows=monthRows(vm).filter(r=>r.c.code&&r.c.code.trim()).map(r=>{const nm=r.paid&&r.paid.file?r.paid.file:compName(r.c,todayN);return Object.assign({},r,{paid:{file:nm,d:r.paid?r.paid.d:todayN},isPaid:!!r.paid})}).sort((a,b)=>(a.isPaid?1:0)-(b.isPaid?1:0));
   $("r-sub").textContent=SH.name+" · "+mlabel(vm);RSEL=null;$("r-save").disabled=true;$("r-share").disabled=true;$("r-mail").disabled=true;$("r-mail").hidden=true;$("r-hint").textContent="Elegí a qué concepto corresponde este comprobante.";
   $("r-list").innerHTML=rows.map((r,j)=>'<label class="rrow"><input type="radio" name="rsel" value="'+j+'"><span>'+r.c.n+(r.isPaid?'':' (pendiente)')+'<small>'+r.paid.file+'</small></span></label>').join("")||'<p class="hint">No hay conceptos con código de comprobante en '+mlabel(vm)+'.</p>';
   document.querySelectorAll('input[name="rsel"]').forEach(inp=>inp.onchange=()=>{RSEL=rows[+inp.value];$("r-save").disabled=false;$("r-share").disabled=false;const m=!!MAIL[RSEL.c.n];$("r-mail").hidden=!m;$("r-mail").disabled=!m;$("r-hint").textContent="Se va a guardar como "+RSEL.paid.file+(RSEL.isPaid?"":" (con la fecha de hoy)")});
+  let rq=document.getElementById("r-q");
+  if(!rq){rq=document.createElement("input");rq.id="r-q";rq.type="search";rq.placeholder="Buscar concepto…";rq.autocomplete="off";rq.style.cssText="width:100%;box-sizing:border-box;padding:11px 12px;border-radius:12px;border:1px solid var(--line);background:var(--surface);color:inherit;font:inherit;margin:0 0 10px";$("r-list").parentNode.insertBefore(rq,$("r-list"));
+    rq.addEventListener("input",()=>{const nz=t=>String(t||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase(),q=nz(rq.value.trim());document.querySelectorAll("#r-list label.rrow").forEach(l=>{l.hidden=!!q&&!nz(l.textContent).includes(q)})})}
+  rq.value="";
   openSheet("rsheet");showBanner()}
 /* aviso permanente mientras haya un comprobante sin guardar */
 function showBanner(){let b=document.getElementById("rbanner");if(!b){b=document.createElement("button");b.id="rbanner";b.type="button";b.style.cssText="position:fixed;left:8px;right:8px;top:calc(env(safe-area-inset-top,0px) + 8px);z-index:99;padding:12px;border-radius:12px;border:1px solid #6fbf9f;background:#143d30;color:#fff;font:inherit;text-align:left";document.body.appendChild(b);b.onclick=()=>openReceipt()}
@@ -995,7 +1000,7 @@ $("r-save").onclick=async()=>{await _rs();if(/^✓/.test($("r-hint").textContent
 
 /* ---- diagnóstico y rescate del comprobante compartido ---- */
 (function(){
-  const vtag=document.createElement("div");vtag.textContent="versión 19";vtag.style.cssText="text-align:center;opacity:.5;font-size:11px;margin:18px 0 6px";document.body.appendChild(vtag);
+  const vtag=document.createElement("div");vtag.textContent="versión 21";vtag.style.cssText="text-align:center;opacity:.5;font-size:11px;margin:18px 0 6px";document.body.appendChild(vtag);
   function msg(t,ok){let b=document.getElementById("rmsg");if(!b){b=document.createElement("div");b.id="rmsg";b.onclick=()=>b.remove();document.body.appendChild(b)}
     b.textContent=t+" (tocá para cerrar)";b.style.cssText="position:fixed;left:8px;right:8px;top:calc(env(safe-area-inset-top,0px) + 8px);z-index:100;padding:12px;border-radius:12px;font-size:13px;color:#fff;background:"+(ok?"#143d30":"#4a1d1d")+";border:1px solid "+(ok?"#6fbf9f":"#e08080")}
   const viaUrl=/[?&]shared=1/.test(location.search);
@@ -1079,18 +1084,34 @@ $("r-save").onclick=async()=>{await _rs();if(/^✓/.test($("r-hint").textContent
   wrap.innerHTML='<button type="button" class="btn" id="b-card" style="width:100%">📄 Cargar resumen de tarjeta (PDF)</button><input type="file" id="f-card" accept="application/pdf,.pdf" multiple hidden><div class="hint" id="card-msg" style="margin-top:8px;white-space:pre-line"></div>';
   const v=document.getElementById("v-tj");v.insertBefore(wrap,v.firstChild);
   const msg=t=>{document.getElementById("card-msg").textContent=t};
+  const cbox=document.createElement("div");cbox.hidden=true;
+  cbox.style.cssText="position:fixed;left:0;right:0;bottom:0;z-index:45;max-height:80vh;overflow:auto;background:var(--surface);color:inherit;border-top:1px solid var(--line);border-radius:18px 18px 0 0;padding:16px max(16px,env(safe-area-inset-left,0px)) calc(env(safe-area-inset-bottom,0px) + 16px);box-shadow:0 -8px 30px rgba(0,0,0,.4)";
+  document.body.appendChild(cbox);
+  function paintC(files,note){
+    cbox.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px"><b>Resúmenes en tu Drive</b><button type="button" class="xs" id="cb-x" aria-label="Cerrar">✕</button></div><div class="hint" style="margin-bottom:10px">'+note+'</div>'
+      +'<div style="display:grid;gap:8px">'+(files||[]).map((f,j)=>'<button type="button" class="btn" data-j="'+j+'" style="text-align:left;display:block;width:100%"><b style="display:block;word-break:break-all">'+f.name.replace(/</g,"&lt;")+'</b></button>').join("")+'</div>'
+      +'<button type="button" class="btn ghost" id="cb-phone" style="width:100%;margin-top:12px">Elegir un archivo del celu</button>';
+    cbox.querySelector("#cb-x").onclick=()=>cbox.hidden=true;cbox.querySelector("#cb-phone").onclick=()=>document.getElementById("f-card").click();
+    cbox.querySelectorAll("[data-j]").forEach(x=>x.onclick=()=>{const f=files[+x.dataset.j];cbox.hidden=true;runImport([{name:f.name,sh:{driveId:f.id,parent:f.parent}}])})}
   document.getElementById("b-card").onclick=async()=>{
-    if(!tokenOk()){msg("Conectando con Google…");try{await ensureToken();msg("✓ Conectado. Tocá de nuevo el botón para elegir el PDF.")}catch(err){msg("✗ "+err.message)}return}
-    document.getElementById("f-card").click()};
-  document.getElementById("f-card").onchange=async e=>{
-    const files=[...e.target.files];e.target.value="";if(!files.length)return;
+    cbox.hidden=false;paintC([],"Buscando en tu Drive…");
+    try{
+      if(!tokenOk())await ensureToken();
+      const all=await listTransit();
+      if(all===null)paintC([],"No encuentro una carpeta «Transitorio» en tu Drive. Creala y compartí ahí el PDF del resumen.");
+      else{const pdfs=all.filter(f=>/pdf/i.test(f.mimeType)||/\.pdf$/i.test(f.name));
+        paintC(pdfs,pdfs.length?"Carpeta «Transitorio». Elegí el resumen: la app lo lee y lo mueve a Tarjetas / año, renombrado.":"No hay PDF en «Transitorio». Compartí el resumen ahí y volvé a tocar el botón.")}
+    }catch(err){paintC([],"✗ "+err.message)}};
+  document.getElementById("f-card").onchange=e=>{const files=[...e.target.files];e.target.value="";if(!files.length)return;cbox.hidden=true;runImport(files.map(f=>({name:f.name,f})))};
+  async function runImport(items){
     const log=[];let ok=0;
     try{
       msg("Preparando el lector de PDF…");await loadPdfJs();
-      for(const f of files){
-        msg("Leyendo "+f.name+"…\n"+log.join("\n"));
+      for(const it of items){
+        msg("Leyendo "+it.name+"…\n"+log.join("\n"));
         try{
-          const buf=await f.arrayBuffer();
+          if(!tokenOk())await ensureToken();
+          const blob=it.f||await downloadDrive(it.sh.driveId);const buf=await blob.arrayBuffer();
           const pdf=await pdfjsLib.getDocument({data:new Uint8Array(buf.slice(0))}).promise;
           const text=await pdfText(pdf);
           const p=CardsLib.parseStatement(text);
@@ -1102,17 +1123,17 @@ $("r-save").onclick=async()=>{await _rs();if(/^✓/.test($("r-hint").textContent
           CARDS.st.sort((x,y)=>x.c<y.c?-1:x.c>y.c?1:x.k<y.k?-1:1);
           const y=p.cierre.slice(0,4),mm=p.cierre.slice(5,7),nm=y+"."+mm+" - "+(p.k==="VISA"?"VISA":"Mastercard")+".pdf";
           msg("Guardando "+nm+" en tu Drive…\n"+log.join("\n"));
-          await uploadReceipt(new File([buf],nm,{type:"application/pdf"}),"Tarjetas",y);
+          if(it.sh)await moveReceipt(it.sh,nm,"Tarjetas",y);else await uploadReceipt(new File([buf],nm,{type:"application/pdf"}),"Tarjetas",y);
           const dif=Math.abs(sum-p.total)>1&&p.k==="VISA";
           const sc=b.st.rows.filter(r=>r[1]==="Sin clasificar").reduce((a,r)=>a+r[3],0);
           log.push("✓ "+(p.k==="VISA"?"VISA":"Mastercard")+" cierre "+p.cierre.slice(8)+"/"+mm+"/"+y+" · total $ "+fmtN(p.total)+" · "+b.st.rows.reduce((a,r)=>a+r[5],0)+" renglones"+(exist?" (reemplazó el anterior)":"")+(b.dup.length?" · "+b.dup.length+" ya cargado(s) como pago propio":"")+(dif?"\n  ⚠ La suma de los consumos no coincide con el total del resumen: revisalo.":"")+(sc>0?"\n  Sin clasificar: $ "+fmtN(sc):""));ok++;
-        }catch(err){log.push("✗ "+f.name+": "+err.message)}
+        }catch(err){log.push("✗ "+it.name+": "+err.message)}
       }
       if(ok){msg("Guardando en tu hoja de Google…\n"+log.join("\n"));await saveCards(CARDS);cacheData(DATA,CARDS)}
       msg(log.join("\n")+(ok?"\n\n✓ Listo. Actualizando la pantalla…":""));
       if(ok)setTimeout(()=>location.reload(),2500)
     }catch(err){msg("✗ "+err.message+(log.length?"\n"+log.join("\n"):""))}
-  };
+  }
 })();
 
 
@@ -1165,8 +1186,8 @@ async function fileLink(name,el){
 
 /* ============ Buscador del mes + Pago extra ============ */
 (function(){
-  const bar=document.createElement("div");bar.style.cssText="display:flex;gap:8px;margin:0 0 12px;align-items:center";
-  bar.innerHTML='<input id="q" type="search" placeholder="Buscar concepto…" autocomplete="off" style="flex:1;min-width:0;padding:11px 12px;border-radius:12px;border:1px solid var(--line);background:var(--surface);color:inherit;font:inherit"><button type="button" class="btn" id="b-extra" style="white-space:nowrap">+ Pago extra</button>';
+  const bar=document.createElement("div");bar.style.cssText="display:flex;justify-content:flex-end;margin:0 0 12px";
+  bar.innerHTML='<button type="button" class="btn" id="b-extra" style="white-space:nowrap">+ Pago extra</button>';
   const lists=$("lists");lists.parentNode.insertBefore(bar,lists);
   const nz=t=>String(t||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase();
   function applyQ(){const q=nz($("q").value.trim());
@@ -1174,8 +1195,6 @@ async function fileLink(name,el){
     document.querySelectorAll("#lists ul").forEach(ul=>{const any=[...ul.children].some(li=>!li.hidden);ul.hidden=!any;if(ul.previousElementSibling&&ul.previousElementSibling.classList.contains("sec"))ul.previousElementSibling.hidden=!any});
     let e=document.getElementById("q-empty");const none=q&&![...document.querySelectorAll("#lists li.item")].some(li=>!li.hidden);
     if(none){if(!e){e=document.createElement("div");e.id="q-empty";e.className="hint";e.style.margin="8px 2px";lists.appendChild(e)}e.textContent="Ningún concepto coincide con «"+$("q").value.trim()+"». Podés registrarlo con + Pago extra."}else if(e)e.remove()}
-  $("q").addEventListener("input",applyQ);
-  const _rm=renderMes;renderMes=function(){_rm();applyQ()};
   // ---- Pago extra ----
   const box=document.createElement("div");box.hidden=true;
   box.style.cssText="position:fixed;left:0;right:0;bottom:0;z-index:45;max-height:90vh;overflow:auto;background:var(--surface);color:inherit;border-top:1px solid var(--line);border-radius:18px 18px 0 0;padding:16px max(16px,env(safe-area-inset-left,0px)) calc(env(safe-area-inset-bottom,0px) + 16px);box-shadow:0 -8px 30px rgba(0,0,0,.4)";
