@@ -429,6 +429,32 @@ function buildStatement(parsed,D){
 root.CardsLib.buildStatement=buildStatement;root.CardsLib.cls=cls;root.CardsLib.norm=norm;
 })(typeof window!=="undefined"?window:globalThis);
 
+/* Lectura de comprobantes: de un texto (OCR o PDF) saca importe, fecha y propone el concepto */
+(function(root){
+const nz=t=>String(t||"").normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase();
+const STOP=new Set(["pago","pagos","del","los","las","con","por","para","mes","cuota","total","banco","cuenta","tarjeta","impuesto","servicio","servicios"]);
+const words=t=>nz(t).split(/[^a-z0-9]+/).filter(w=>w.length>=4&&!/^\d+$/.test(w)&&!STOP.has(w));
+function amount(text){
+  const re=/(U\$S|US\$|USD)?\s*\$\s*([\d]{1,3}(?:\.\d{3})*(?:,\d{1,2})?|\d+(?:,\d{1,2})?)(?![\d.*-])/gi;let m;const out=[];
+  while((m=re.exec(text))){const v=parseFloat(m[2].replace(/\./g,"").replace(",","."));if(isFinite(v)&&v>=1)out.push({v,usd:!!m[1]})}
+  return out.length?out[0]:null}
+function date(text){
+  const re=/\b(\d{1,2})[\/\-](\d{1,2})[\/\-](20\d\d)\b/g;let m;
+  while((m=re.exec(text))){const d=+m[1],mo=+m[2];if(d>=1&&d<=31&&mo>=1&&mo<=12)return +m[3]*10000+mo*100+d}
+  return null}
+function destTokens(text){const L=text.split(/\n/).map(s=>s.trim()).filter(Boolean);
+  for(let i=0;i<L.length;i++)if(/^para$/i.test(L[i])&&L[i+1])return words(L[i+1]);return[]}
+function readReceipt(text,concepts,hints){
+  const n=nz(text),det={amt:null,usd:false,d:null,best:null,dest:destTokens(text),score:0};
+  const a=amount(text);if(a){det.amt=a.v;det.usd=a.usd}det.d=date(text);
+  let best=null,bs=0;
+  concepts.forEach(c=>{let s=0;const toks=new Set(words(c.n+" "+(c.code||"")));toks.forEach(t=>{if(n.includes(t))s+=1});
+    for(const[t,name]of Object.entries(hints||{}))if(name===c.n&&n.includes(t))s+=5;
+    if(s>bs){bs=s;best=c.n}});
+  det.best=best;det.score=bs;return det}
+root.ReceiptLib={readReceipt,amount,date};
+})(typeof window!=="undefined"?window:globalThis);
+
 </script>
 <script>
 const $=id=>document.getElementById(id);
@@ -993,7 +1019,38 @@ function openReceipt(){
   if(!rq){rq=document.createElement("input");rq.id="r-q";rq.type="search";rq.placeholder="Buscar concepto…";rq.autocomplete="off";rq.style.cssText="width:100%;box-sizing:border-box;padding:11px 12px;border-radius:12px;border:1px solid var(--line);background:var(--surface);color:inherit;font:inherit;margin:0 0 10px";$("r-list").parentNode.insertBefore(rq,$("r-list"));
     rq.addEventListener("input",()=>{const nz=t=>String(t||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase(),q=nz(rq.value.trim());document.querySelectorAll("#r-list label.rrow").forEach(l=>{l.hidden=!!q&&!nz(l.textContent).includes(q)})})}
   rq.value="";
-  openSheet("rsheet");showBanner()}
+  openSheet("rsheet");showBanner();analyzeReceipt(rows)}
+
+/* ---- leer importe y fecha del comprobante ---- */
+let TESS=null;
+function loadTess(){if(window.Tesseract)return Promise.resolve();if(TESS)return TESS;
+  TESS=new Promise((res,rej)=>{const s=document.createElement("script");s.src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js";s.onload=()=>res();s.onerror=()=>{TESS=null;rej(new Error("sin lector de imágenes"))};document.head.appendChild(s)});return TESS}
+function getHints(){try{return JSON.parse(localStorage.getItem("mp-hints")||"{}")}catch(e){return{}}}
+function learnHint(det,sel){try{if(!det||!sel||!det.dest||!det.dest.length)return;const t=det.dest.slice().sort((a,b)=>b.length-a.length)[0];if(!t||t.length<5)return;const h=getHints();h[t]=sel.c.n;localStorage.setItem("mp-hints",JSON.stringify(h))}catch(e){}}
+async function receiptText(){
+  if(SH.driveId&&!SH.blob)SH.blob=await downloadDrive(SH.driveId);
+  const b=SH.blob;if(!b)return"";
+  const isPdf=/pdf/i.test(b.type||"")||/\.pdf$/i.test(SH.name||"");
+  if(isPdf){await window.__loadPdfJs();const pdf=await pdfjsLib.getDocument({data:new Uint8Array(await b.arrayBuffer())}).promise;return await pdfText(pdf)}
+  await loadTess();const r=await Tesseract.recognize(b,"spa",{langPath:"https://cdn.jsdelivr.net/npm/@tesseract.js-data/spa/4.0.0"});return r.data.text||""}
+async function analyzeReceipt(rows){
+  const mine=SH;if(!mine)return;const hint=$("r-hint");const base=hint.textContent;
+  hint.textContent="Leyendo el comprobante…";
+  try{
+    const text=await receiptText();if(SH!==mine)return;
+    const det=ReceiptLib.readReceipt(text,rows.map(r=>({n:r.c.n,code:r.c.code})),getHints());mine.det=det;
+    const parts=[];if(det.amt)parts.push("$ "+fmtN(det.amt));if(det.d){const s=String(det.d);parts.push(s.slice(6)+"/"+s.slice(4,6)+"/"+s.slice(0,4))}
+    let msg=parts.length?"Detecté "+parts.join(" · "):"No pude leer el importe";
+    if(det.best&&det.score>0&&!RSEL){const i=rows.findIndex(r=>r.c.n===det.best),inp=document.querySelector('input[name="rsel"][value="'+i+'"]');
+      if(inp){inp.checked=true;inp.dispatchEvent(new Event("change"));inp.scrollIntoView({block:"nearest"});msg+=" — parece "+det.best+". Revisalo."}}
+    else if(!RSEL)msg+=". Elegí el concepto.";
+    hint.textContent=msg+(RSEL?"\n"+$("r-hint").textContent.replace(/^Detecté.*\n?/,""):"");
+    if(RSEL)hint.textContent=msg+"\nSe va a guardar como "+RSEL.paid.file+(RSEL.isPaid?"":" (con la fecha de hoy)");
+  }catch(e){if(SH===mine&&!RSEL)hint.textContent="No pude leer el comprobante ("+e.message+"). Elegí el concepto."}}
+function fillPay(det){if(!det||!det.amt||!$("p-amt"))return;
+  $("p-amt").value=String(det.amt).replace(".",",");
+  if(det.d){const s=String(det.d);$("p-date").value=s.slice(0,4)+"-"+s.slice(4,6)+"-"+s.slice(6)}
+  try{updPay()}catch(e){}}
 /* aviso permanente mientras haya un comprobante sin guardar */
 function showBanner(){let b=document.getElementById("rbanner");if(!b){b=document.createElement("button");b.id="rbanner";b.type="button";b.style.cssText="position:fixed;left:8px;right:8px;top:calc(env(safe-area-inset-top,0px) + 8px);z-index:99;padding:12px;border-radius:12px;border:1px solid #6fbf9f;background:#143d30;color:#fff;font:inherit;text-align:left";document.body.appendChild(b);b.onclick=()=>openReceipt()}
   b.textContent="📎 Comprobante sin guardar: "+SH.name+" — tocá para elegir el concepto";b.hidden=false}
@@ -1002,7 +1059,7 @@ $("r-save").onclick=async()=>{await _rs();if(/^✓/.test($("r-hint").textContent
 
 /* ---- diagnóstico y rescate del comprobante compartido ---- */
 (function(){
-  const vtag=document.createElement("div");vtag.textContent="versión 22";vtag.style.cssText="text-align:center;opacity:.5;font-size:11px;margin:18px 0 6px";document.body.appendChild(vtag);
+  const vtag=document.createElement("div");vtag.textContent="versión 23";vtag.style.cssText="text-align:center;opacity:.5;font-size:11px;margin:18px 0 6px";document.body.appendChild(vtag);
   function msg(t,ok){let b=document.getElementById("rmsg");if(!b){b=document.createElement("div");b.id="rmsg";b.onclick=()=>b.remove();document.body.appendChild(b)}
     b.textContent=t+" (tocá para cerrar)";b.style.cssText="position:fixed;left:8px;right:8px;top:calc(env(safe-area-inset-top,0px) + 8px);z-index:100;padding:12px;border-radius:12px;font-size:13px;color:#fff;background:"+(ok?"#143d30":"#4a1d1d")+";border:1px solid "+(ok?"#6fbf9f":"#e08080")}
   const viaUrl=/[?&]shared=1/.test(location.search);
@@ -1057,18 +1114,18 @@ $("r-save").onclick=async()=>{await _rs();if(/^✓/.test($("r-hint").textContent
   const prev=$("r-save").onclick;
   $("r-save").onclick=async()=>{await prev();
     if(/^✓/.test($("r-hint").textContent)){
-      const txt=$("r-hint").textContent;SH=null;const sel=RSEL;
+      const txt=$("r-hint").textContent;const det=SH&&SH.det;SH=null;const sel=RSEL;learnHint(det,sel);
       const bn=document.getElementById("rbanner");if(bn)bn.hidden=true;
       setTimeout(()=>{closeSheets();const t=document.createElement("div");t.textContent=txt;
         t.style.cssText="position:fixed;left:8px;right:8px;top:calc(env(safe-area-inset-top,0px) + 8px);z-index:100;padding:12px;border-radius:12px;font-size:14px;color:#fff;background:#143d30;border:1px solid #6fbf9f";
-        document.body.appendChild(t);setTimeout(()=>t.remove(),3500);if(sel&&!sel.isPaid)setTimeout(()=>openPay(sel.ci,vm),350)},900)}};
+        document.body.appendChild(t);setTimeout(()=>t.remove(),3500);if(sel&&!sel.isPaid){setTimeout(()=>openPay(sel.ci,vm),350);setTimeout(()=>fillPay(det),650)}},900)}};
 })();
 
 /* ============ Cargar resumen de tarjeta (PDF) ============ */
 (function(){
   const BASEU="https://sheets.googleapis.com/v4/spreadsheets/";
   const PDFB="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/";
-  let pdfReady=null;
+  let pdfReady=null;window.__loadPdfJs=()=>loadPdfJs();
   function loadPdfJs(){if(window.pdfjsLib)return Promise.resolve();if(pdfReady)return pdfReady;
     pdfReady=new Promise((res,rej)=>{const s=document.createElement("script");s.src=PDFB+"pdf.min.js";
       s.onload=()=>{try{pdfjsLib.GlobalWorkerOptions.workerSrc=PDFB+"pdf.worker.min.js";res()}catch(e){rej(e)}};
