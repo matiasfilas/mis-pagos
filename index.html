@@ -415,7 +415,7 @@ function buildStatement(parsed,D){
   const agg=new Map(),dup=[],adj=[];
   for(const r of rowsIn){
     const tit=r.tax?"—":(r.card==="9445"?"Luisa":"Matías");
-    const rub=cls(r),me=r.tax?titleCase(r.d).slice(0,28):norm(r.d);let isdup=false;
+    const me=r.tax?titleCase(r.d).slice(0,28):norm(r.d),rub=(!r.tax&&D.rules&&D.rules[me])||cls(r);let isdup=false;
     if(!r.tax&&r.p>=1000){let d0=null;try{d0=dd(r.f)}catch(e){}
       if(d0&&!isNaN(d0))for(const p of D.pay){const c=C[p[1]];
         if(c.cat!=="Tarjetas"&&c.mon==="Pesos"&&Math.abs(p[2]-r.p)<0.015&&Math.abs((ymdMs(p[0])-d0)/864e5)<=7){
@@ -658,8 +658,8 @@ function renderMes(){
   const i=vm;$("mtitle").textContent=mlabel(i);
   $("mprev").disabled=i<=0;$("mnext").disabled=i>=CUR_I;
   const rows=monthRows(i), paid=rows.filter(r=>r.paid), pend=rows.filter(r=>!r.paid);
-  const pes=(r,amt,mon)=>mon==="USD"?amt*LASTRATE:amt;
-  const tp=paid.reduce((a,r)=>a+pes(r,r.paid.imp,r.c.mon),0);
+  const pes=(r,amt,mon,d)=>mon==="USD"?amt*(d?rateAt(d):LASTRATE):amt;
+  const tp=paid.reduce((a,r)=>a+pes(r,r.paid.imp,r.c.mon,r.paid.d),0);
   const est=pend.reduce((a,r)=>{const lp=lastPay(r.ci);return a+(lp?pes(r,lp.imp,r.c.mon):0)},0), tot=tp+est;
   const pc=rows.length?Math.round(paid.length/rows.length*100):0, pm=tot?Math.round(tp/tot*100):0;
   $("s-count").textContent=paid.length+" de "+rows.length;
@@ -908,18 +908,18 @@ function renderTj(){
   SIC.forEach(s=>{if(s.i<lo||s.i>hi)return;s.rows.forEach(r=>{if(isDup(r))return;const g=gk(r,s),o=map[g]=map[g]||{n:g,t:0,c:{}};const x=tv(r,s);o.t+=x;const c=ck(r,s);o.c[c]=(o.c[c]||0)+x})});
   const gs=Object.values(map).filter(o=>Math.abs(o.t)>0.5).sort((a,b)=>b.t-a.t);const gmax=Math.max(1,...gs.map(o=>o.t));
   const col=(g,i)=>g==="Sin clasificar"?"var(--c9)":"var(--c"+Math.min(8,i)+")";
-  $("tj-groups").innerHTML=gs.map((o,i)=>{const open=tOpen.has(o.n);const cs=Object.entries(o.c).filter(e=>e[1]>0.5).sort((a,b)=>b[1]-a[1]);const top=cs.slice(0,12),rest=cs.slice(12).reduce((a,e)=>a+e[1],0);
+  $("tj-groups").innerHTML=gs.map((o,i)=>{const open=tOpen.has(o.n);const cs=Object.entries(o.c).filter(e=>e[1]>0.5).sort((a,b)=>b[1]-a[1]);const NT=o.n==="Sin clasificar"?80:12,top=cs.slice(0,NT),rest=cs.slice(NT).reduce((a,e)=>a+e[1],0);
     return '<div class="grp'+(open?" open":"")+'"><button type="button" class="gh" data-g="'+o.n.replace(/"/g,"&quot;")+'" aria-expanded="'+open+'"><div class="g-top"><span class="g-name"><i class="sw" style="background:'+col(o.n,i)+'"></i>'+o.n+'</span><span class="g-right"><span class="g-amt num">'+tf(o.t)+'</span><i class="chev"></i></span></div><div class="track"><div class="fill" style="width:'+(o.t/gmax*100)+'%;background:'+col(o.n,i)+'"></div></div><div class="g-sub"><span class="num">'+(T?(o.t/T*100).toLocaleString("es-AR",{maximumFractionDigits:1})+"% del total":"")+'</span></div></button>'+
-    (open?'<div class="crows">'+top.map(e=>'<div class="crow" style="cursor:default"><span class="cn">'+e[0].replace(/</g,"&lt;")+'</span><span class="ca num">'+tf(e[1])+'</span><i></i></div>').join("")+(rest>0.5?'<div class="crow" style="cursor:default"><span class="cn">Otros ('+(cs.length-12)+')</span><span class="ca num">'+tf(rest)+'</span><i></i></div>':"")+'</div>':"")+'</div>'}).join("");
-  document.querySelectorAll("#tj-groups .gh").forEach(b=>b.onclick=()=>{const g=b.dataset.g;tOpen.has(g)?tOpen.delete(g):tOpen.add(g);renderTj()});
+    (open?'<div class="crows">'+top.map(e=>'<div class="crow"'+(tgrp==="r"&&o.n!=="Cargos, impuestos e intereses"?' data-m="'+encodeURIComponent(e[0])+'" style="cursor:pointer"':' style="cursor:default"')+'><span class="cn">'+e[0].replace(/</g,"&lt;")+'</span><span class="ca num">'+tf(e[1])+'</span><i></i></div>').join("")+(rest>0.5?'<div class="crow" style="cursor:default"><span class="cn">Otros ('+(cs.length-NT)+')</span><span class="ca num">'+tf(rest)+'</span><i></i></div>':"")+'</div>':"")+'</div>'}).join("");
+  document.querySelectorAll("#tj-groups .crow[data-m]").forEach(c=>c.onclick=()=>askRubro(decodeURIComponent(c.dataset.m)));document.querySelectorAll("#tj-groups .gh").forEach(b=>b.onclick=()=>{const g=b.dataset.g;tOpen.has(g)?tOpen.delete(g):tOpen.add(g);renderTj()});
   // avisos
   let sc=0;SIC.forEach(s=>{if(s.i>=lo&&s.i<=hi)s.rows.forEach(r=>{if(r[1]==="Sin clasificar")sc+=tv(r,s)})});
-  const w=[];if(T&&sc/T>0.03)w.push((sc/T*100).toFixed(0)+"% del consumo todavía está sin clasificar: son comercios sueltos que aún no tienen regla.");
-  $("tj-warn").hidden=!w.length;$("tj-warn").textContent=w.join(" ");
+  const w=[];if(T&&sc>0.5)w.push((sc/T*100).toFixed(sc/T<0.1?1:0)+"% del consumo está sin clasificar.");
+  $("tj-warn").hidden=!w.length;$("tj-warn").textContent=w.join(" ");if(w.length){const bs=document.createElement("button");bs.type="button";bs.className="btn";bs.textContent="Clasificar ahora";bs.style.cssText="display:block;margin-top:8px;width:auto";bs.onclick=()=>{tgrp="r";tOpen.add("Sin clasificar");renderTj();const g=document.querySelector("#tj-groups .gh[data-g=\"Sin clasificar\"]");if(g)g.scrollIntoView({block:"start"})};$("tj-warn").appendChild(bs)}
   const dups=CARDS.dup.filter(d=>{const i=mi(+d[0].replace(/-/g,""));return i>=lo&&i<=hi});
   const nt=[];
   if(dups.length)nt.push("Ya cargados como pago propio y excluidos de estos totales: "+dups.map(d=>d[2].toLowerCase()+" → "+d[4]+" ("+money(d[3],"ARS")+")").join("; ")+".");
-  nt.push("Los pagos de las tarjetas en sí (lo que se debita de tu cuenta) siguen en la solapa Análisis; acá se ve el detalle de lo que consumiste. Los dólares usan la cotización del día de cierre.");
+  if(tgrp==="r")nt.push("Para cambiar el rubro de un comercio: abrí el rubro y tocá el comercio.");nt.push("Los pagos de las tarjetas en sí (lo que se debita de tu cuenta) siguen en la solapa Análisis; acá se ve el detalle de lo que consumiste. Los dólares usan la cotización del día de cierre.");
   $("tj-notes").innerHTML=nt.map(x=>"<div>"+x+"</div>").join("");
 }
 // avisos de la solapa Análisis: ajustes y pagos faltantes
@@ -1059,7 +1059,7 @@ $("r-save").onclick=async()=>{await _rs();if(/^✓/.test($("r-hint").textContent
 
 /* ---- diagnóstico y rescate del comprobante compartido ---- */
 (function(){
-  const vtag=document.createElement("div");vtag.textContent="versión 23";vtag.style.cssText="text-align:center;opacity:.5;font-size:11px;margin:18px 0 6px";document.body.appendChild(vtag);
+  const vtag=document.createElement("div");vtag.textContent="versión 25";vtag.style.cssText="text-align:center;opacity:.5;font-size:11px;margin:18px 0 6px";document.body.appendChild(vtag);
   function msg(t,ok){let b=document.getElementById("rmsg");if(!b){b=document.createElement("div");b.id="rmsg";b.onclick=()=>b.remove();document.body.appendChild(b)}
     b.textContent=t+" (tocá para cerrar)";b.style.cssText="position:fixed;left:8px;right:8px;top:calc(env(safe-area-inset-top,0px) + 8px);z-index:100;padding:12px;border-radius:12px;font-size:13px;color:#fff;background:"+(ok?"#143d30":"#4a1d1d")+";border:1px solid "+(ok?"#6fbf9f":"#e08080")}
   const viaUrl=/[?&]shared=1/.test(location.search);
@@ -1130,6 +1130,7 @@ $("r-save").onclick=async()=>{await _rs();if(/^✓/.test($("r-hint").textContent
     pdfReady=new Promise((res,rej)=>{const s=document.createElement("script");s.src=PDFB+"pdf.min.js";
       s.onload=()=>{try{pdfjsLib.GlobalWorkerOptions.workerSrc=PDFB+"pdf.worker.min.js";res()}catch(e){rej(e)}};
       s.onerror=()=>{pdfReady=null;rej(new Error("No pude cargar el lector de PDF. Revisá tu conexión."))};document.head.appendChild(s)});return pdfReady}
+  window.__saveCards=c=>saveCards(c);
   async function saveCards(cards){const id=await findBase();if(!id)throw new Error("No encuentro tu base en Google.");
     await gapi(BASEU+id+"/values/Config!A:B:clear",{method:"POST",headers:JH,body:"{}"});
     const rows=[["clave","valor"]].concat(chunk(JSON.stringify(cards),40000).map((x,i)=>["tarjetas_"+i,x]));
@@ -1175,7 +1176,7 @@ $("r-save").onclick=async()=>{await _rs();if(/^✓/.test($("r-hint").textContent
           const text=await pdfText(pdf);
           const p=CardsLib.parseStatement(text);
           const sum=CardsLib.r2(p.rows.reduce((a,r)=>a+r.p,0));
-          const b=CardsLib.buildStatement(p,DATA);
+          const b=CardsLib.buildStatement(p,{conc:DATA.conc,pay:DATA.pay,rules:CARDS.rules||{}});
           const exist=CARDS.st.some(s=>s.c===p.cierre&&s.k===p.k);
           quitar(p.cierre,p.k);
           CARDS.st.push(b.st);CARDS.dup.push(...b.dup);CARDS.adj.push(...b.adj);
@@ -1291,6 +1292,35 @@ async function fileLink(name,el){
       vm=Math.min(i,CUR_I);renderMes();if(tokenOk())syncNow()};
   };
 })();
+
+/* ============ Reclasificar comercios de tarjeta ============ */
+function toastMp(t,bad){const d=document.createElement("div");d.textContent=t;d.style.cssText="position:fixed;left:8px;right:8px;top:calc(env(safe-area-inset-top,0px) + 8px);z-index:100;padding:12px;border-radius:12px;font-size:14px;color:#fff;background:"+(bad?"#5a1f1f":"#143d30")+";border:1px solid "+(bad?"#d98080":"#6fbf9f");document.body.appendChild(d);setTimeout(()=>d.remove(),bad?6000:3500)}
+function rubrosCards(){const m={};CARDS.st.forEach(s=>s.rows.forEach(r=>{if(r[1]==="DUP"||r[1]==="Sin clasificar"||r[1]==="Cargos, impuestos e intereses")return;m[r[1]]=(m[r[1]]||0)+1}));return Object.keys(m).sort((a,b)=>m[b]-m[a])}
+async function setRubro(me,rub){
+  CARDS.rules=CARDS.rules||{};CARDS.rules[me]=rub;let n=0;
+  CARDS.st.forEach(s=>{const mp=new Map();
+    s.rows.forEach(r=>{const x=r.slice();if(x[2]===me&&x[1]!=="DUP"&&x[1]!=="Cargos, impuestos e intereses"&&x[1]!==rub){x[1]=rub;n++}
+      const k=x[0]+"\u0001"+x[1]+"\u0001"+x[2],a=mp.get(k);if(a){a[3]=Math.round((a[3]+x[3])*100)/100;a[4]=Math.round((a[4]+x[4])*100)/100;a[5]+=x[5]}else mp.set(k,x)});
+    s.rows=[...mp.values()];
+    const y=+s.c.replace(/-/g,""),kk=s.k==="MC"?"Mastercard":"VISA",t=SIC.find(z=>z.y===y&&z.k===kk);if(t)t.rows=s.rows});
+  cacheData(DATA,CARDS);renderTj();
+  try{if(!tokenOk())await ensureToken();await window.__saveCards(CARDS);toastMp("✓ "+me+" → "+rub+" ("+n+(n===1?" renglón":" renglones")+" cambiados). Se aplica también a los próximos resúmenes.")}
+  catch(e){toastMp("Se cambió en el celu pero no pude guardarlo en Google: "+e.message+". Volvé a intentarlo.",true)}}
+function askRubro(me){
+  let box=document.getElementById("rubbox");if(box)box.remove();
+  box=document.createElement("div");box.id="rubbox";
+  box.style.cssText="position:fixed;left:0;right:0;bottom:0;z-index:60;max-height:80vh;overflow:auto;background:var(--surface);color:var(--text,inherit);border-top:1px solid var(--line);border-radius:18px 18px 0 0;padding:16px max(16px,env(safe-area-inset-left,0px)) calc(env(safe-area-inset-bottom,0px) + 16px);box-shadow:0 -8px 30px rgba(0,0,0,.4)";
+  const esc=t=>String(t).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/"/g,"&quot;");
+  const cur=(CARDS.st.flatMap(s=>s.rows).find(r=>r[2]===me)||[])[1]||"";
+  const rs=rubrosCards();
+  box.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px"><b style="overflow-wrap:anywhere">Rubro para «'+esc(me)+'»</b><button type="button" class="xs" id="rb-x" aria-label="Cerrar">✕</button></div><div class="hint" style="margin-bottom:10px">Ahora está en: '+esc(cur)+'. El cambio vale para todos los resúmenes y los que cargues después.</div>'
+   +rs.map((r,i)=>'<button type="button" class="btn" data-i="'+i+'" style="display:block;width:100%;text-align:left;margin:0 0 6px">'+esc(r)+(r===cur?" ✓":"")+'</button>').join("")
+   +'<div style="display:flex;gap:8px;margin-top:10px"><input id="rb-n" type="text" placeholder="Rubro nuevo…" maxlength="40" style="flex:1;min-width:0;padding:11px 12px;border-radius:12px;border:1px solid var(--line);background:var(--surface);color:inherit;font:inherit"><button type="button" class="btn primary" id="rb-ok" style="width:auto">Crear</button></div>';
+  document.body.appendChild(box);
+  const close=()=>box.remove(),pick=r=>{close();setRubro(me,r)};
+  box.querySelector("#rb-x").onclick=close;
+  box.querySelectorAll("button[data-i]").forEach(b=>b.onclick=()=>pick(rs[+b.dataset.i]));
+  box.querySelector("#rb-ok").onclick=()=>{const v=box.querySelector("#rb-n").value.trim();if(v&&v!=="DUP"&&v!=="Sin clasificar")pick(v)}}
 
 renderMes();
 
