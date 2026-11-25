@@ -194,7 +194,7 @@ label.f{display:grid;font-size:12.5px;color:var(--muted);font-weight:500}
 
   <h2>Tendencia</h2>
   <div class="card" style="padding:12px 8px 6px"><svg class="chart" id="chart" viewBox="0 0 360 210" role="img" aria-label="Evolución mensual"></svg></div>
-  <div class="legend" id="ctx" hidden>Se muestran 6 meses para dar contexto; el período elegido está sombreado.</div>
+  <div class="legend" id="cleg" hidden style="margin-top:6px"></div><div class="legend" id="ctx" hidden>Se muestran 6 meses para dar contexto; el período elegido está sombreado.</div>
   <label class="lab" for="conc" style="margin-top:10px">Qué mirar<select id="conc"></select></label>
   <div class="card" style="margin-top:10px"><div class="stats" id="stats"></div></div>
 
@@ -614,7 +614,7 @@ const RD=RATES.map(r=>r[0]),RV=RATES.map(r=>r[1]);
 function rateAt(x){let lo=0,hi=RD.length-1,a=0;while(lo<=hi){const m=(lo+hi)>>1;if(RD[m]<=x){a=m;lo=m+1}else hi=m-1}return RV[a]}
 const LASTRATE=RV[RV.length-1];
 // pagos
-const P=DATA.pay.map(p=>({d:p[0],ci:p[1],imp:p[2],usd:p[3],cm:p[4],pes:CONC[p[1]].mon==="USD"?p[2]*rateAt(p[0]):p[2]}));
+const P=DATA.pay.map(p=>({d:p[0],ci:p[1],imp:p[2],usd:(CONC[p[1]].mon!=="USD"&&rateAt(p[0]))?Math.round(p[2]/rateAt(p[0])*100)/100:p[3],cm:p[4],pes:CONC[p[1]].mon==="USD"?p[2]*rateAt(p[0]):p[2]}));
 const M=mi(P[P.length-1].d)+1;
 const U=CONC.map(()=>new Array(M).fill(0)),PS=CONC.map(()=>new Array(M).fill(0)),N=CONC.map(()=>new Array(M).fill(0));
 const byC=CONC.map(()=>[]);
@@ -798,9 +798,9 @@ function renderAn(){
     return '<div class="grp'+(open?" open":"")+'"><button type="button" class="gh" data-g="'+g.n+'" aria-expanded="'+open+'"><div class="g-top"><span class="g-name"><i class="sw" style="background:'+COL(g.n)+'"></i>'+g.n+'</span><span class="g-right"><span class="g-amt num">'+fm(g.cur)+'</span><i class="chev"></i></span></div>'+
     '<div class="track"><div class="fill" style="width:'+(g.cur/max*100)+'%;background:'+COL(g.n)+'"></div>'+(W.ps!=null&&g.prev?'<div class="prev" style="left:calc('+(g.prev/max*100)+'% - 1px)"></div>':"")+'</div>'+
     '<div class="g-sub"><span class="num">'+(T?(g.cur/T*100).toLocaleString("es-AR",{maximumFractionDigits:0})+"% del total":"")+'</span>'+(W.ps!=null?chipOf(g.cur,g.prev):"")+'</div></button>'+
-    (open?'<div class="crows">'+cs.map(x=>'<button type="button" class="crow" data-ci="'+x.ci+'"><span class="cn">'+x.c.n+'</span><span class="ca num">'+fm(x.cur)+(W.ps!=null?"<br>"+chipOf(x.cur,x.prev):"")+'</span><i class="arr"></i></button>').join("")+'</div>':"")+'</div>'}).join("");
-  document.querySelectorAll(".gh").forEach(b=>b.onclick=()=>{const g=b.dataset.g;openG.has(g)?openG.delete(g):openG.add(g);renderAn()});
-  document.querySelectorAll(".crow").forEach(b=>b.onclick=()=>openConc(+b.dataset.ci,W));
+    (open?'<div class="crows">'+(key==="g:"+g.n?'<button type="button" class="crow" data-trend="1"><span class="cn">Ver su tendencia en el gráfico ↑</span><span></span><i class="arr"></i></button>':"")+cs.map(x=>'<button type="button" class="crow" data-ci="'+x.ci+'"><span class="cn">'+x.c.n+'</span><span class="ca num">'+fm(x.cur)+(W.ps!=null?"<br>"+chipOf(x.cur,x.prev):"")+'</span><i class="arr"></i></button>').join("")+'</div>':"")+'</div>'}).join("");
+  document.querySelectorAll(".gh").forEach(b=>b.onclick=()=>{const g=b.dataset.g;if(openG.has(g)){openG.delete(g);if(key==="g:"+g)key="__total"}else{openG.add(g);key="g:"+g}renderAn()});
+  document.querySelectorAll(".crow[data-ci]").forEach(b=>b.onclick=()=>openConc(+b.dataset.ci,W));document.querySelectorAll(".crow[data-trend]").forEach(b=>b.onclick=()=>$("chart").scrollIntoView({behavior:"smooth",block:"center"}));
   // movers
   const mv=CONC.map((c,ci)=>({n:c.n,cur:sumC(ci,W.s,W.e),prev:W.ps!=null?sumC(ci,W.ps,W.pe):0})).filter(x=>W.ps!=null&&x.cur&&x.prev).map(x=>({...x,d:x.cur-x.prev,p:(x.cur-x.prev)/x.prev*100}));
   const row=x=>'<div class="mrow"><span>'+x.n+'</span><span class="num">'+(x.d>0?"+":"−")+fm(Math.abs(x.d))+"<br>"+pct(x.p)+'</span></div>';
@@ -814,11 +814,18 @@ function renderAn(){
   $("conc").value=key;
   chart(W);years();
 }
+function multiSeries(W,cs,ce){const g=key.slice(2),a=A(),cc=[];
+  CONC.forEach((c,ci)=>{if(gof(c)!==g)return;let t=0,any=false;for(let i=cs;i<=ce;i++){t+=a[ci][i];if(N[ci][i])any=true}if(any)cc.push({n:c.n,ci,t})});
+  cc.sort((x,y)=>y.t-x.t);const top=cc.slice(0,5),rest=cc.slice(5);
+  const out=top.map(x=>({n:x.n,v:Array.from({length:M},(_,i)=>N[x.ci][i]?a[x.ci][i]:null)}));
+  if(rest.length)out.push({n:"Otros ("+rest.length+")",v:Array.from({length:M},(_,i)=>{let t=0,n=0;rest.forEach(r=>{t+=a[r.ci][i];n+=N[r.ci][i]});return n?t:null})});
+  return out}
 function chart(W){
   const ser=seriesOf(key),Wd=360,H=210,L=56,R_=16,Tp=22,B=34,iw=Wd-L-R_,ih=H-Tp-B;
   const cs=W.len<3?Math.max(0,W.e-5):W.s,ce=W.e,span=Math.max(1,ce-cs),ext=cs<W.s;
   $("ctx").hidden=!ext;
   const idx=[];for(let i=cs;i<=ce;i++)idx.push(i);
+  let MULTI=key.startsWith("g:")?multiSeries(W,cs,ce):null;if(MULTI&&MULTI.length<2)MULTI=null;
   const vals=idx.map(i=>ser[i]).filter(x=>x!=null),mx=Math.max(...vals,1);
   const step=(()=>{const raw=mx/4,p=Math.pow(10,Math.floor(Math.log10(raw))),f=raw/p;return(f<=1?1:f<=2?2:f<=2.5?2.5:f<=5?5:10)*p})();
   const top=Math.ceil(mx/step)*step,X=i=>L+iw*(i-cs)/span,Y=y=>Tp+ih*(1-y/top),bw=iw/span/2;
@@ -829,11 +836,19 @@ function chart(W){
   idx.forEach((i,j)=>{if(j%every===0)s+='<text x="'+X(i)+'" y="'+(H-18)+'" text-anchor="middle">'+M3[i%12]+'</text>';
     if(j===0||i%12===0)s+='<text x="'+X(i)+'" y="'+(H-5)+'" text-anchor="middle">'+(Y0+Math.floor(i/12))+'</text>'});
   let seg=[],cur=[];idx.forEach(i=>{const y=ser[i];if(y==null){if(cur.length)seg.push(cur);cur=[]}else cur.push([i,y])});if(cur.length)seg.push(cur);
-  seg.forEach(sg=>{if(sg.length>1){const d=sg.map((p,j)=>(j?"L":"M")+X(p[0]).toFixed(1)+" "+Y(p[1]).toFixed(1)).join(" ");s+='<path class="area" d="'+d+' L'+X(sg[sg.length-1][0])+' '+Y(0)+' L'+X(sg[0][0])+' '+Y(0)+'Z"/><path class="ln" d="'+d+'"/>'}});
+  if(!MULTI)seg.forEach(sg=>{if(sg.length>1){const d=sg.map((p,j)=>(j?"L":"M")+X(p[0]).toFixed(1)+" "+Y(p[1]).toFixed(1)).join(" ");s+='<path class="area" d="'+d+' L'+X(sg[sg.length-1][0])+' '+Y(0)+' L'+X(sg[0][0])+' '+Y(0)+'Z"/><path class="ln" d="'+d+'"/>'}});
   const lblAll=idx.length<=6;
-  idx.forEach(i=>{const y=ser[i];if(y==null)return;const inw=i>=W.s&&i<=W.e,part=i===M-1&&M-1===CUR_I;
+  if(!MULTI)idx.forEach(i=>{const y=ser[i];if(y==null)return;const inw=i>=W.s&&i<=W.e,part=i===M-1&&M-1===CUR_I;
     s+='<circle class="pt'+(part?" part":"")+'" cx="'+X(i)+'" cy="'+Y(y)+'" r="'+(inw?4.2:2.8)+'"/>';
     if((lblAll&&inw)||(!lblAll&&i===ce)){const an=i===ce?"end":i===cs?"start":"middle";s+='<text class="val" x="'+X(i)+'" y="'+(Y(y)-9)+'" text-anchor="'+an+'">'+comp(y)+'</text>'}});
+  if(MULTI){
+    MULTI.forEach((m,j)=>{const col="var(--c"+Math.min(j,8)+")";let sg=[],cu=[];idx.forEach(i=>{const y=m.v[i];if(y==null){if(cu.length)sg.push(cu);cu=[]}else cu.push([i,y])});if(cu.length)sg.push(cu);
+      sg.forEach(p=>{if(p.length>1)s+='<path d="'+p.map((q,k)=>(k?"L":"M")+X(q[0]).toFixed(1)+" "+Y(q[1]).toFixed(1)).join(" ")+'" fill="none" stroke="'+col+'" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"/>';p.forEach(q=>{s+='<circle cx="'+X(q[0])+'" cy="'+Y(q[1])+'" r="'+(q[0]>=W.s&&q[0]<=W.e?3.4:2.4)+'" fill="'+col+'"/>'})})});
+    const tp=idx.filter(i=>ser[i]!=null);
+    if(tp.length>1)s+='<path d="'+tp.map((i,k)=>(k?"L":"M")+X(i).toFixed(1)+" "+Y(ser[i]).toFixed(1)).join(" ")+'" fill="none" stroke="var(--muted)" stroke-width="1.8" stroke-dasharray="5 4"/>';
+    if(tp.length){const li=tp[tp.length-1];s+='<text class="val" x="'+X(li)+'" y="'+(Y(ser[li])-9)+'" text-anchor="end">'+comp(ser[li])+'</text>'}
+    $("cleg").hidden=false;$("cleg").innerHTML='<b>'+key.slice(2).replace(/</g,"&lt;")+'</b>: '+MULTI.map((m,j)=>'<span style="white-space:nowrap;margin-right:10px"><i style="display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;background:var(--c'+Math.min(j,8)+')"></i>'+m.n.replace(/</g,"&lt;")+'</span>').join("")+'<span style="white-space:nowrap"><span style="display:inline-block;width:16px;height:0;border-top:2px dashed var(--muted);margin-right:5px;vertical-align:middle"></span>Total</span>'
+  }else $("cleg").hidden=true;
   $("chart").innerHTML=s;
   const inW=[];for(let i=W.s;i<=W.e;i++)if(ser[i]!=null)inW.push([i,ser[i]]);
   const tot=inW.reduce((a,x)=>a+x[1],0);let ptot=null;if(W.ps!=null){ptot=0;for(let i=W.ps;i<=W.pe;i++)ptot+=ser[i]||0}
@@ -1059,7 +1074,7 @@ $("r-save").onclick=async()=>{await _rs();if(/^✓/.test($("r-hint").textContent
 
 /* ---- diagnóstico y rescate del comprobante compartido ---- */
 (function(){
-  const vtag=document.createElement("div");vtag.textContent="versión 25";vtag.style.cssText="text-align:center;opacity:.5;font-size:11px;margin:18px 0 6px";document.body.appendChild(vtag);
+  const vtag=document.createElement("div");vtag.textContent="versión 27";vtag.style.cssText="text-align:center;opacity:.5;font-size:11px;margin:18px 0 6px";document.body.appendChild(vtag);
   function msg(t,ok){let b=document.getElementById("rmsg");if(!b){b=document.createElement("div");b.id="rmsg";b.onclick=()=>b.remove();document.body.appendChild(b)}
     b.textContent=t+" (tocá para cerrar)";b.style.cssText="position:fixed;left:8px;right:8px;top:calc(env(safe-area-inset-top,0px) + 8px);z-index:100;padding:12px;border-radius:12px;font-size:13px;color:#fff;background:"+(ok?"#143d30":"#4a1d1d")+";border:1px solid "+(ok?"#6fbf9f":"#e08080")}
   const viaUrl=/[?&]shared=1/.test(location.search);
